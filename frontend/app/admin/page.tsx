@@ -19,9 +19,6 @@ export default function AdminPage() {
     }
     const u = getCurrentUser();
     setUser(u);
-    if (u && u.role !== 'founder' && u.role !== 'chief') {
-      // 非 founder/chief 显示 403
-    }
   }, [router]);
 
   if (!user) {

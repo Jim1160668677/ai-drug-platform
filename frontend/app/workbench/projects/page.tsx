@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { FolderKanban, Plus, Trash2, Archive, Play, Pause } from 'lucide-react';
-import { getProjects, createProject, getProject } from '@/lib/api';
+import { getProjects, createProject } from '@/lib/api';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
