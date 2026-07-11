@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "FeedbackLoop", "ExperimentTracker", "LimsImporter",
-    "PipelineManager", "NextflowRunner",
+    "NextflowRunner",
 ]
 
 try:
@@ -18,12 +18,6 @@ try:
 except ImportError as e:
     logger.warning(f"feedback_loop 导入失败: {e}")
     FeedbackLoop = ExperimentTracker = LimsImporter = None  # type: ignore
-
-try:
-    from app.services.workflow.pipeline_manager import PipelineManager
-except ImportError as e:
-    logger.warning(f"pipeline_manager 导入失败: {e}")
-    PipelineManager = None  # type: ignore
 
 try:
     from app.services.workflow.nextflow_runner import NextflowRunner

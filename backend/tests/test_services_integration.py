@@ -9,7 +9,6 @@
 - ChEMBL 服务（activity/approved/repurposing score）
 - LLMOrchestrator 路由 / 意图识别 / 成本估算 / 基因抽取 / full_analysis
 - RAGEngine retrieve/augment
-- PipelineManager 管道元数据
 - FeedbackLoop 干湿闭环反馈
 - LimsImporter 实验数据导入
 - SDTMExporter CDISC 导出（SDTM + ADaM + CSV）
@@ -595,44 +594,6 @@ class TestRAGEngine:
         assert "KRAS 是 GTPase" in result
         assert "解释 EGFR" in result
         assert "[文献 1]" in result
-
-
-# ========== PipelineManager ==========
-
-class TestPipelineManager:
-    """管道管理器测试"""
-
-    def test_list_pipelines(self):
-        from app.services.workflow.pipeline_manager import PipelineManager
-
-        mgr = PipelineManager()
-        pipelines = mgr.list_pipelines()
-        names = [p["name"] for p in pipelines]
-        assert "scrna_pipeline" in names
-        assert "rna_seq_pipeline" in names
-        assert "variant_annotation" in names
-        for p in pipelines:
-            assert "description" in p
-            assert "phase" in p
-            assert "input_type" in p
-            assert "output_files" in p
-
-    def test_get_pipeline_config_known(self):
-        from app.services.workflow.pipeline_manager import PipelineManager
-
-        mgr = PipelineManager()
-        config = mgr.get_pipeline_config("scrna_pipeline")
-        assert config["name"] == "scrna_pipeline"
-        assert "params_template" in config
-        assert "script" in config
-
-    def test_get_pipeline_config_unknown(self):
-        from app.services.workflow.pipeline_manager import PipelineManager
-
-        mgr = PipelineManager()
-        result = mgr.get_pipeline_config("nonexistent_pipeline")
-        assert "error" in result
-        assert "available" in result
 
 
 # ========== FeedbackLoop ==========

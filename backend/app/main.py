@@ -98,7 +98,7 @@ app = FastAPI(
         {"name": "报告", "description": "CDISC SDTM/ADaM 导出"},
         {"name": "工作流", "description": "Nextflow 流水线"},
         {"name": "知识库", "description": "MyGene/MyVariant/ChEMBL/ClinicalTrials"},
-        {"name": "联邦学习", "description": "PharmaFedAvg 多机构协同"},
+        {"name": "联邦学习", "description": "FederatedLearningService 多机构协同"},
         {"name": "隐私计算", "description": "PySyft 域、差分隐私、数据脱敏"},
         {"name": "疗效监测", "description": "Kaplan-Meier、不良事件"},
         {"name": "反馈协作", "description": "用户反馈、问题跟踪"},

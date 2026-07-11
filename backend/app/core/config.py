@@ -41,8 +41,6 @@ class Settings(BaseSettings):
 
     # ========== 数据库 ==========
     DATABASE_URL: str = "postgresql+asyncpg://pdd:pdd_secret@postgres:5432/precision_drug"
-    POSTGRES_HOST: str = "postgres"
-    POSTGRES_PORT: int = 5432
 
     # ========== Redis ==========
     REDIS_HOST: str = "redis"
@@ -61,8 +59,6 @@ class Settings(BaseSettings):
 
     # ========== MinIO ==========
     MINIO_ENDPOINT: str = "minio:9000"
-    MINIO_ACCESS_KEY: str = "pdd_minio"
-    MINIO_SECRET_KEY: str = "pdd_minio_secret"
     MINIO_BUCKET: str = "pdd-data"
 
     # ========== 大模型 ==========
@@ -85,27 +81,18 @@ class Settings(BaseSettings):
     DIFFDOCK_NIM_URL: str = "https://integrate.api.nvidia.com/v1/genai/biology/mit/diffdock"
 
     # ========== 联邦学习 ==========
-    FLOWER_SERVER_ADDRESS: str = "flower-server:8080"
     FL_NUM_ROUNDS_DEFAULT: int = 10
     FL_MIN_CLIENTS_DEFAULT: int = 3
     FL_MAD_THRESHOLD: float = 3.0  # 中位数绝对偏差阈值（恶意客户端检测）
 
     # ========== LLM 预算与护栏 ==========
     LLM_DAILY_BUDGET_USD: float = 50.0
-    LLM_COST_TRACKER_REDIS_URL: str = ""  # 空则回退到默认 Redis
     GUARDRAIL_ENABLED: bool = True
     GUARDRAIL_MAX_DOSE_MG: float = 1000.0  # 剂量上限（mg）
     GUARDRAIL_BLOCK_PATTERNS: str = "绝对治愈,100%有效,包治百病,特效药"
 
-    # ========== 差分隐私 ==========
-    DP_DEFAULT_EPSILON: float = 1.0
-    DP_DEFAULT_DELTA: float = 1e-5
-
     # ========== 限流 ==========
-    RATE_LIMIT_ENABLED: bool = False
-    RATE_LIMIT_RPM: int = 60  # 每分钟请求数
-    RATE_LIMIT_STRATEGY: str = "sliding_window"  # sliding_window / token_bucket
-    # 登录端点限流（防暴力破解，始终启用，独立于 RATE_LIMIT_ENABLED）
+    # 登录端点限流（防暴力破解，始终启用）
     LOGIN_RATE_LIMIT_PER_MINUTE: int = 5
 
     # ========== 信封中间件 ==========
@@ -115,10 +102,6 @@ class Settings(BaseSettings):
     # ========== 日志 ==========
     LOG_LEVEL: str = "INFO"
     LOG_FILE_PATH: str = "logs"
-    LOG_ROTATION: str = "10 MB"
-
-    # ========== 前端 ==========
-    FRONTEND_PORT: int = 3000
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod

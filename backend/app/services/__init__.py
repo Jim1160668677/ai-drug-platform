@@ -26,14 +26,13 @@ __all__ = [
     # optimizer
     "TreatmentPlanner", "TreatmentOptimizer", "EfficacyMonitor",
     "DynamicAdjuster", "FederatedLearningService", "FederatedLearner",
-    "PharmaFedAvg", "FLClient", "ClientRegistry",
     # privacy
     "PrivacyLayer", "DifferentialPrivacy", "PrivacyBudget", "DataMasker",
     # report
     "CdiscExporter", "HypothesisComparator",
     # workflow
     "FeedbackLoop", "ExperimentTracker", "LimsImporter",
-    "PipelineManager", "NextflowRunner",
+    "NextflowRunner",
 ]
 
 
@@ -136,19 +135,6 @@ except ImportError as e:
     logger.warning(f"FederatedLearningService 导入失败: {e}")
     FederatedLearningService = FederatedLearner = None  # type: ignore
 
-try:
-    from app.services.optimizer.pharma_fedavg import PharmaFedAvg
-except ImportError as e:
-    logger.warning(f"PharmaFedAvg 导入失败: {e}")
-    PharmaFedAvg = None  # type: ignore
-
-try:
-    from app.services.optimizer.fl_client import FLClient, ClientRegistry
-except ImportError as e:
-    logger.warning(f"FLClient 导入失败: {e}")
-    FLClient = ClientRegistry = None  # type: ignore
-
-
 # ========== privacy ==========
 try:
     from app.services.privacy.privacy_layer import PrivacyLayer
@@ -193,12 +179,6 @@ try:
 except ImportError as e:
     logger.warning(f"FeedbackLoop 导入失败: {e}")
     FeedbackLoop = ExperimentTracker = LimsImporter = None  # type: ignore
-
-try:
-    from app.services.workflow.pipeline_manager import PipelineManager
-except ImportError as e:
-    logger.warning(f"PipelineManager 导入失败: {e}")
-    PipelineManager = None  # type: ignore
 
 try:
     from app.services.workflow.nextflow_runner import NextflowRunner

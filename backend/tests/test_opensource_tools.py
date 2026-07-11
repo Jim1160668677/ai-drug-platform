@@ -241,10 +241,6 @@ class TestNextflowIntegration:
         from app.services.workflow.nextflow_runner import NextflowRunner
         assert NextflowRunner is not None
 
-    def test_pipeline_manager_importable(self):
-        from app.services.workflow.pipeline_manager import PipelineManager
-        assert PipelineManager is not None
-
 
 # ========== P2 工具：DeepChem 分子设计（降级）==========
 

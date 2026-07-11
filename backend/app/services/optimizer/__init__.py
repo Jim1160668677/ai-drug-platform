@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "TreatmentPlanner", "TreatmentOptimizer", "EfficacyMonitor", "DynamicAdjuster",
     "FederatedLearningService", "FederatedLearner",
-    "PharmaFedAvg", "FLClient", "ClientRegistry",
 ]
 
 # 分段导入 — 失败不中断整个包
@@ -40,15 +39,3 @@ try:
 except ImportError as e:
     logger.warning(f"federated_learning 导入失败: {e}")
     FederatedLearningService = FederatedLearner = None  # type: ignore
-
-try:
-    from app.services.optimizer.pharma_fedavg import PharmaFedAvg
-except ImportError as e:
-    logger.warning(f"pharma_fedavg 导入失败: {e}")
-    PharmaFedAvg = None  # type: ignore
-
-try:
-    from app.services.optimizer.fl_client import FLClient, ClientRegistry
-except ImportError as e:
-    logger.warning(f"fl_client 导入失败: {e}")
-    FLClient = ClientRegistry = None  # type: ignore
