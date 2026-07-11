@@ -1,0 +1,130 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      rollback:
+        description: 'Rollback to previous version'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || 'staging' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set deployment metadata
+        id: meta
+        run: |
+          echo "release_tag=$(date +'%Y%m%d-%H%M%S')-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "deploy_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_REGISTRY }}/precision-drug-backend:${{ steps.meta.outputs.release_tag }}
+            ${{ secrets.DOCKER_REGISTRY }}/precision-drug-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_REGISTRY }}/precision-drug-frontend:${{ steps.meta.outputs.release_tag }}
+            ${{ secrets.DOCKER_REGISTRY }}/precision-drug-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: Release ${{ steps.meta.outputs.release_tag }}
+          body: |
+            自动部署发布
+            - 环境: ${{ github.event.inputs.environment || 'staging' }}
+            - 时间: ${{ steps.meta.outputs.deploy_time }}
+            - 提交: ${{ github.sha }}
+          draft: false
+          prerelease: ${{ github.event.inputs.environment != 'production' }}
+
+      - name: Notify deployment
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: 'Deployment ${{ job.status }}'
+          SLACK_MESSAGE: |
+            环境: ${{ github.event.inputs.environment || 'staging' }}
+            版本: ${{ steps.meta.outputs.release_tag }}
+            提交: ${{ github.event.head_commit.message }}
+        continue-on-error: true
+
+  rollback:
+    name: Rollback
+    runs-on: ubuntu-latest
+    if: github.event.inputs.rollback == 'true'
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rollback to previous version
+        run: |
+          echo "Rolling back ${{ github.event.inputs.environment }} to previous version"
+          # SSH 到部署服务器执行 docker-compose pull && docker-compose up -d
+          # 具体脚本依部署环境而定
+
+  health-check:
+    name: Post-deploy health check
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.event.inputs.rollback != 'true'
+    steps:
+      - name: Wait for service startup
+        run: sleep 30
+
+      - name: Check API health
+        run: |
+          for i in {1..10}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.HEALTH_CHECK_URL }}/health || echo "000")
+            echo "Attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "Service healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Health check failed"
+          exit 1

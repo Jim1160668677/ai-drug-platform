@@ -1,0 +1,40 @@
+INFO:     Will watch for changes in these directories: ['G:\\软件开发\\AI药物\\backend']
+[32m2026-07-04 12:19:41.604[0m | [1mINFO    [0m | [36mapp.main[0m:[36m<module>[0m:[36m99[0m - [1mAPI v1 路由已挂载[0m
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [13420] using WatchFiles
+[32m2026-07-04 12:19:44.434[0m | [1mINFO    [0m | [36mapp.main[0m:[36m<module>[0m:[36m99[0m - [1mAPI v1 路由已挂载[0m
+INFO:     Started server process [15744]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\api\v1\endpoints\reports.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [15744]
+WARNING:  WatchFiles detected changes in 'app\api\v1\endpoints\reports.py'. Reloading...
+[32m2026-07-04 12:29:42.475[0m | [1mINFO    [0m | [36mapp.main[0m:[36m<module>[0m:[36m99[0m - [1mAPI v1 路由已挂载[0m
+INFO:     Started server process [5664]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [5664]
+[32m2026-07-04 12:29:45.627[0m | [1mINFO    [0m | [36mapp.main[0m:[36m<module>[0m:[36m99[0m - [1mAPI v1 路由已挂载[0m
+INFO:     Started server process [10352]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\services\optimizer\treatment_planner.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [10352]
+[32m2026-07-04 12:51:32.932[0m | [1mINFO    [0m | [36mapp.main[0m:[36m<module>[0m:[36m99[0m - [1mAPI v1 路由已挂载[0m
+INFO:     Started server process [16172]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\services\optimizer\treatment_planner.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [16172]

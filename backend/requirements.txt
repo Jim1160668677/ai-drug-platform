@@ -1,0 +1,93 @@
+# ========== Python 版本要求 ==========
+# 要求 Python >= 3.11（统一开发/测试/部署环境）
+# 参见 .python-version 和 environment.yml
+
+# ========== Web 框架 ==========
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+websockets==12.0
+
+# ========== 数据库 ==========
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0
+alembic==1.13.2
+psycopg2-binary==2.9.9
+
+# ========== 缓存与任务 ==========
+redis==4.6.0
+arq==0.26.0
+
+# ========== 数据处理 ==========
+pandas==2.2.2
+numpy==1.26.4
+anndata==0.10.7
+scanpy==1.10.2
+scikit-learn==1.5.0
+scipy==1.13.1
+
+# ========== 生物信息 ==========
+biopython==1.83
+# cyvcf2==0.31.1  # 可选：Windows 构建需 htslib，未安装时 VcfParser 自动降级为文本解析
+
+# ========== 化学信息学 ==========
+rdkit==2024.3.5
+
+# ========== 向量检索 ==========
+# chromadb==0.5.3  # 需 MSVC++ Build Tools 编译 chroma-hnswlib；Mock 模式下懒加载不导入，暂跳过
+
+# ========== 图数据库 ==========
+neo4j==5.22.0
+
+# ========== 对象存储 ==========
+minio==7.2.7
+
+# ========== 大模型 ==========
+openai==1.35.0
+
+# ========== HTTP ==========
+httpx==0.27.0
+requests==2.32.3
+
+# ========== 安全与认证 ==========
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.4.0
+pyjwt==2.8.0
+slowapi==0.1.9
+
+# ========== 配置与校验 ==========
+pydantic==2.7.4
+pydantic-settings==2.3.4
+python-dotenv==1.0.1
+
+# ========== 工具 ==========
+loguru==0.7.2
+tenacity==8.4.1
+orjson==3.10.5
+python-dateutil==2.9.0
+click==8.1.7
+
+# ========== 测试 ==========
+pytest==8.2.2
+pytest-asyncio==0.23.7
+pytest-cov==5.0.0
+
+# ========== CDISC ==========
+# pandas 已包含
+
+# ========== 代码检查 ==========
+ruff==0.4.9
+
+# ========== 测试用 SQLite 异步驱动 ==========
+aiosqlite==0.20.0
+
+# ========== P2 (Phase 2 — 靶点引擎深化，可选) ==========
+# 启用方法：取消注释并安装 GPU 环境
+# deepchem>=2.8.0
+# torch>=2.1.0
+# torch-geometric>=2.4.0
+
+# ========== P3 (Phase 3 — 联邦学习与隐私，可选) ==========
+# 启用方法：取消注释
+# flower>=1.7.0
+# pysyft>=0.9.0

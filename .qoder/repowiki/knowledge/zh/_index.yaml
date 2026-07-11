@@ -1,0 +1,35 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: Q0DeR-MaG1C-BrAnCh-Fo2-NoN-GiT-Or-No-C0MmIt
+nodes_managed: true
+exported_at: "2026-07-05T05:13:15Z"
+modules:
+    "":
+        dir_name: AI 模式精准药物设计系统（根项目）
+        title: AI 模式精准药物设计系统（根项目）
+        scope:
+            - precision-drug-design/README.md
+            - precision-drug-design/pyproject.toml
+            - precision-drug-design/environment.yml
+            - precision-drug-design/.gitignore
+            - 2026-07-03-github-opensource-integration-guide-AI模式.md
+            - 2026-07-03-github-opensource-integration-guide.md
+            - AI模式精准药物设计系统-创意文档-v3.0-extracted.md
+            - AI模式精准药物设计系统-创意文档-v3.0.docx
+        source_files: []
+        children:
+            - frontend_streamlit
+        depends_on: []
+        related_to: []
+    frontend_streamlit:
+        dir_name: Streamlit Web 前端与认证入口
+        title: Streamlit Web 前端与认证入口
+        scope:
+            - precision-drug-design/frontend/app.py
+            - precision-drug-design/frontend/auth.py
+            - precision-drug-design/frontend/api_client.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

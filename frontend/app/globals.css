@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #f9fafb;
+  --foreground: #111827;
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Markdown 样式 */
+.markdown-body h1 {
+  @apply text-2xl font-bold mb-4 mt-6;
+}
+
+.markdown-body h2 {
+  @apply text-xl font-bold mb-3 mt-5;
+}
+
+.markdown-body h3 {
+  @apply text-lg font-semibold mb-2 mt-4;
+}
+
+.markdown-body p {
+  @apply mb-3 leading-relaxed;
+}
+
+.markdown-body ul {
+  @apply list-disc pl-6 mb-3;
+}
+
+.markdown-body ol {
+  @apply list-decimal pl-6 mb-3;
+}
+
+.markdown-body code {
+  @apply bg-gray-100 text-pink-600 px-1.5 py-0.5 rounded text-sm font-mono;
+}
+
+.markdown-body pre {
+  @apply bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto mb-3;
+}
+
+.markdown-body pre code {
+  @apply bg-transparent text-current p-0;
+}
+
+.markdown-body blockquote {
+  @apply border-l-4 border-primary-500 pl-4 italic text-gray-600 my-3;
+}
+
+.markdown-body table {
+  @apply w-full border-collapse my-3;
+}
+
+.markdown-body th,
+.markdown-body td {
+  @apply border border-gray-300 px-3 py-2 text-left;
+}
+
+.markdown-body th {
+  @apply bg-gray-50 font-semibold;
+}
+
+/* 加载动画 */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin 1.5s linear infinite;
+}

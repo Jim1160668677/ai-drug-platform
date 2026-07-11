@@ -1,0 +1,29 @@
+# 精准药物设计系统 CODEOWNERS
+# 默认所有者
+*                       @precision-drug-team
+
+# 后端
+/backend/               @precision-drug-backend
+/backend/app/api/       @precision-drug-backend
+/backend/app/services/  @precision-drug-backend
+/backend/app/models/    @precision-drug-backend
+/backend/tests/         @precision-drug-qa
+
+# 前端
+/frontend/              @precision-drug-frontend
+/frontend/app/          @precision-drug-frontend
+/frontend/components/   @precision-drug-frontend
+/frontend/lib/          @precision-drug-frontend
+
+# 文档
+/docs/                  @precision-drug-team
+/README.md              @precision-drug-team
+
+# CI/CD
+/.github/               @precision-drug-devops
+/docker-compose.yml     @precision-drug-devops
+
+# 安全相关
+/backend/app/core/      @precision-drug-security
+/backend/app/core/encryption.py  @precision-drug-security
+/backend/app/core/security.py    @precision-drug-security

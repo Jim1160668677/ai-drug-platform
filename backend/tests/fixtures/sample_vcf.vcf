@@ -1,0 +1,13 @@
+##fileformat=VCFv4.2
+##fileDate=20260703
+##reference=GRCh38
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">
+##INFO=<ID=AN,Number=1,Type=Integer,Description="Total number of alleles">
+##INFO=<ID=Gene,Number=1,Type=String,Description="Gene symbol">
+##INFO=<ID=HGVS_P,Number=1,Type=String,Description="Protein change">
+##INFO=<ID=ClinVar,Number=1,Type=String,Description="ClinVar significance">
+##contig=<ID=chr7,length=159345973>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr7	55259515	rs121913466	T	A	500	PASS	Gene=EGFR;HGVS_P=p.Thr790Met;ClinVar=Pathogenic;AC=1;AF=0.5;AN=2
+chr7	55259513	rs121913465	G	A	500	PASS	Gene=EGFR;HGVS_P=p.Leu858Arg;ClinVar=Pathogenic;AC=1;AF=0.5;AN=2

@@ -1,0 +1,219 @@
+name: precision-drug-design
+
+services:
+  # ========== 数据库 ==========
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: pdd-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pdd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdd_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-precision_drug}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pdd}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: pdd-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== 向量检索 ==========
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: pdd-chromadb
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== 图数据库 ==========
+  neo4j:
+    image: neo4j:5-community
+    container_name: pdd-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-neo4j_secret}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== 对象存储 ==========
+  minio:
+    image: minio/minio:latest
+    container_name: pdd-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-pdd_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-pdd_minio_secret}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== 后端 API ==========
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: pdd-backend
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pdd}:${POSTGRES_PASSWORD:-pdd_secret}@postgres:5432/${POSTGRES_DB:-precision_drug}
+      REDIS_HOST: redis
+      CHROMA_HOST: chromadb
+      NEO4J_HOST: neo4j
+      MINIO_ENDPOINT: minio:9000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+      - ../nextflow:/app/nextflow:ro
+      - ../data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # ========== 异步任务 Worker ==========
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: pdd-worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pdd}:${POSTGRES_PASSWORD:-pdd_secret}@postgres:5432/${POSTGRES_DB:-precision_drug}
+      REDIS_HOST: redis
+      CHROMA_HOST: chromadb
+      NEO4J_HOST: neo4j
+      MINIO_ENDPOINT: minio:9000
+      WORKER_MODE: "true"
+    volumes:
+      - ../backend:/app
+      - ../nextflow:/app/nextflow:ro
+      - ../data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m app.worker
+
+  # ========== 前端 ==========
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: pdd-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+      NEXT_PUBLIC_USE_MOCK: ${USE_MOCK:-true}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    command: sh -c "npm install && npm run dev"
+
+  # ========== Nextflow 工作流引擎 ==========
+  nextflow:
+    image: nextflow/nextflow:24.04.0
+    container_name: pdd-nextflow
+    restart: unless-stopped
+    environment:
+      NXF_WORK: /data/nextflow/work
+    volumes:
+      - ../nextflow:/app/nextflow:ro
+      - ../data:/data
+    depends_on:
+      - backend
+    entrypoint: ["sleep", "infinity"]
+
+  # ========== 反向代理 ==========
+  nginx:
+    image: nginx:alpine
+    container_name: pdd-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - frontend
+
+  # ========== 联邦学习服务器（第三阶段） ==========
+  flower-server:
+    image: python:3.11-slim
+    container_name: pdd-flower-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    command: >
+      sh -c "pip install --quiet flwr==1.8.0 &&
+             python -m flwr.server.start_server --server-address 0.0.0.0:8080 --config num_rounds=10"
+    profiles:
+      - phase3
+
+volumes:
+  postgres_data:
+  redis_data:
+  chroma_data:
+  neo4j_data:
+  minio_data:
