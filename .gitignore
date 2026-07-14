@@ -107,3 +107,9 @@ docker-compose.override.yml
 *.tmp
 *.bak
 *.cache
+
+# ========== 大数据文件（超过 GitHub 100MB 限制，保留本地） ==========
+实验数据/scrna_seq/GSE127465_RAW.tar
+实验数据/scrna_seq/human_p1t1_raw_counts.tsv
+*.tar
+*.tsv
