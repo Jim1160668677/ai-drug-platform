@@ -16,7 +16,7 @@ export default function ExperimentsPage() {
   const [submitTarget, setSubmitTarget] = useState<string | null>(null);
   const [resultForm, setResultForm] = useState({ measured: '', notes: '' });
 
-  const { data: experiments, isLoading } = useQuery({
+  const { data: experiments, isLoading, isError, refetch } = useQuery({
     queryKey: ['experiments', currentProject?.id],
     queryFn: () => getExperiments(currentProject?.id),
     enabled: !!currentProject,
@@ -81,7 +81,12 @@ export default function ExperimentsPage() {
 
       {/* 迭代时间线 */}
       <Card title="迭代时间线">
-        {isLoading ? (
+        {isError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+            <p className="text-sm text-red-600 mb-3">数据加载失败</p>
+            <button onClick={() => refetch()} className="text-xs text-primary-600 underline">重试</button>
+          </div>
+        ) : isLoading ? (
           <div className="text-center py-8 text-gray-400">加载中...</div>
         ) : Object.keys(byIteration).length > 0 ? (
           <div className="space-y-6">

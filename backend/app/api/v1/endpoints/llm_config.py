@@ -428,3 +428,58 @@ async def test_llm_config(
         cfg.last_test_message = f"{type(e).__name__}: {str(e)[:200]}"
         await db.flush()
         return LLMTestResponse(success=False, message=error_msg, duration_sec=duration)
+
+
+# ========== 监控与缓存端点 ==========
+
+@router.get("/metrics", response_model=StandardResponse, summary="LLM 性能监控")
+async def get_llm_metrics(
+    days: int = Query(7, ge=1, le=90, description="查询天数"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取 LLM 调用性能监控指标"""
+    from app.services.llm.monitor import LLMMonitor
+    from app.services.llm.cost_tracker import get_cost_tracker
+
+    monitor = LLMMonitor(db)
+    summary = await monitor.get_summary(days)
+    timeline = await monitor.get_timeline(days)
+    by_tier = await monitor.get_by_tier(days)
+    by_model = await monitor.get_by_model(days)
+    errors = await monitor.get_recent_errors(limit=10)
+    cost = get_cost_tracker().today_summary()
+
+    return StandardResponse(
+        message="LLM 监控指标",
+        data={
+            "summary": summary,
+            "timeline": timeline,
+            "by_tier": by_tier,
+            "by_model": by_model,
+            "recent_errors": errors,
+            "today_cost": cost,
+        },
+    )
+
+
+@router.get("/cache/stats", response_model=StandardResponse, summary="LLM 缓存统计")
+async def get_cache_stats(
+    current_user: User = Depends(get_current_user),
+):
+    """获取 LLM 响应缓存统计"""
+    from app.services.llm.cache import get_cache
+
+    stats = get_cache().stats()
+    return StandardResponse(message="缓存统计", data=stats)
+
+
+@router.delete("/cache", response_model=StandardResponse, summary="清空 LLM 缓存")
+async def invalidate_cache(
+    current_user: User = Depends(require_role(UserRole.FOUNDER, UserRole.CHIEF_RESEARCHER)),
+):
+    """清空 LLM 响应缓存"""
+    from app.services.llm.cache import get_cache
+
+    count = await get_cache().invalidate()
+    return StandardResponse(message=f"已清空 {count} 条缓存", data={"invalidated": count})

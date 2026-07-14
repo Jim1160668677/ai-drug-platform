@@ -20,12 +20,13 @@ describe('auth 模块', () => {
   });
 
   describe('login', () => {
-    it('调用 api 并将 token 与 user 写入 localStorage', async () => {
+    it('调用 api 并将 token 与 user 写入 localStorage 与 cookie', async () => {
       const user = await login('u@e.com', 'pw');
       expect(apiLogin).toHaveBeenCalledWith('u@e.com', 'pw');
       expect(user.access_token).toBe('tok');
       expect(window.localStorage.getItem(TOKEN_KEY)).toBe('tok');
       expect(window.localStorage.getItem(USER_KEY)).toContain('"name":"U"');
+      expect(document.cookie).toContain('ai_drug_token=');
     });
 
     it('api 报错时透传错误且不写入 localStorage', async () => {
@@ -65,27 +66,20 @@ describe('auth 模块', () => {
   });
 
   describe('logout', () => {
-    it('清除 localStorage 并跳转到 /', () => {
+    it('清除 localStorage 与 cookie 并使用 SPA 导航到 /', () => {
       window.localStorage.setItem(TOKEN_KEY, 'x');
       window.localStorage.setItem(USER_KEY, '{}');
-      // mock location.href setter
-      const hrefSetter = vi.fn();
-      Object.defineProperty(window, 'location', {
-        configurable: true,
-        value: {
-          get href() {
-            return '/';
-          },
-          set href(v: string) {
-            hrefSetter(v);
-          },
-          pathname: '/dashboard',
-        },
-      });
+      document.cookie = 'ai_drug_token=x; path=/';
+      const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
       logout();
       expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
       expect(window.localStorage.getItem(USER_KEY)).toBeNull();
-      expect(hrefSetter).toHaveBeenCalledWith('/');
+      expect(document.cookie).not.toContain('ai_drug_token=x');
+      expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '/');
+      expect(dispatchSpy).toHaveBeenCalled();
+      replaceStateSpy.mockRestore();
+      dispatchSpy.mockRestore();
     });
   });
 });

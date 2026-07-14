@@ -260,3 +260,151 @@ async def list_clients(
         )
 
     return success_response(data={"items": clients, "count": len(clients)})
+
+
+# ========== Phase 5 新增端点 ==========
+
+
+class ConfigureDPRequest(BaseModel):
+    """差分隐私配置请求体"""
+
+    enabled: bool = Field(True, description="是否启用差分隐私")
+    noise_multiplier: float = Field(1.0, ge=0.0, description="噪声乘子，越大隐私越强")
+    max_norm: float = Field(1.0, ge=0.0, description="梯度裁剪范数")
+
+
+@router.get("/jobs/{job_id}/metrics", summary="获取任务指标历史")
+async def get_metrics_history(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取联邦学习任务的全局指标历史记录
+
+    返回每轮聚合后的：
+    - global_loss / global_accuracy
+    - val_metrics（验证集指标）
+    - client_contributions（各客户端贡献度）
+    - convergence_trend（收敛趋势）
+    """
+    service = _get_fl_service()
+    try:
+        result = await service.get_metrics_history(job_id)
+    except Exception as e:
+        logger.error("查询指标历史失败: %s", e, exc_info=True)
+        raise UpstreamError(
+            f"查询指标历史失败: {e}",
+            service="federated_learning",
+        )
+
+    if result.get("error"):
+        raise NotFoundError(
+            result["error"],
+            details={"job_id": job_id},
+        )
+
+    return success_response(data=result)
+
+
+@router.post("/jobs/{job_id}/dp", summary="配置差分隐私")
+async def configure_dp(
+    job_id: str,
+    payload: ConfigureDPRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """为联邦学习任务配置差分隐私（DP-SGD）
+
+    - enabled: 是否启用
+    - noise_multiplier: 噪声乘子（σ，越大隐私越强）
+    - max_norm: 梯度裁剪范数（C）
+
+    启用后，每轮聚合的权重将先裁剪到 max_norm 范数，再加高斯噪声 N(0, σ*C)。
+    依赖 opacus（可选），未安装时降级为 numpy 纯 Python 实现。
+    """
+    service = _get_fl_service()
+    try:
+        result = await service.configure_dp(
+            job_id=job_id,
+            enabled=payload.enabled,
+            noise_multiplier=payload.noise_multiplier,
+            max_norm=payload.max_norm,
+        )
+    except Exception as e:
+        logger.error("配置差分隐私失败: %s", e, exc_info=True)
+        raise UpstreamError(
+            f"配置差分隐私失败: {e}",
+            service="federated_learning",
+        )
+
+    if result.get("error"):
+        raise NotFoundError(
+            result["error"],
+            details={"job_id": job_id},
+        )
+
+    return success_response(data=result)
+
+
+@router.get("/jobs/{job_id}/centers", summary="获取多中心协作状态")
+async def get_centers(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取联邦学习任务的多中心协作配置与最新状态
+
+    返回：
+    - centers: 多中心配置列表
+    - last_centers_breakdown: 最近一轮各中心的聚合分解
+    """
+    service = _get_fl_service()
+    try:
+        result = await service.get_centers(job_id)
+    except Exception as e:
+        logger.error("查询多中心状态失败: %s", e, exc_info=True)
+        raise UpstreamError(
+            f"查询多中心状态失败: {e}",
+            service="federated_learning",
+        )
+
+    if result.get("error"):
+        raise NotFoundError(
+            result["error"],
+            details={"job_id": job_id},
+        )
+
+    return success_response(data=result)
+
+
+@router.get("/jobs/{job_id}/evaluate", summary="评估全局模型")
+async def evaluate_global_model(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """评估联邦学习全局模型性能
+
+    返回：
+    - aggregated_weights_summary: 权重摘要（层数/均值/最小/最大）
+    - last_round_metrics: 最后一轮指标
+    - rounds_completed / total_rounds
+    - dp_applied / framework
+    """
+    service = _get_fl_service()
+    try:
+        result = await service.evaluate_global_model(job_id)
+    except Exception as e:
+        logger.error("评估全局模型失败: %s", e, exc_info=True)
+        raise UpstreamError(
+            f"评估全局模型失败: {e}",
+            service="federated_learning",
+        )
+
+    if result.get("error"):
+        raise NotFoundError(
+            result["error"],
+            details={"job_id": job_id},
+        )
+
+    return success_response(data=result)

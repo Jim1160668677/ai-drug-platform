@@ -32,7 +32,7 @@ class TestMoleculeDesigner:
 
     @pytest.mark.asyncio
     async def test_design_framework_only(self):
-        """P0 框架模式（DeepChem 未安装）"""
+        """P0 框架模式（DeepChem 未安装时降级为 RDKit）"""
         from app.services.analyzer.molecule_designer import MoleculeDesigner
 
         designer = MoleculeDesigner(db=MagicMock())
@@ -41,10 +41,11 @@ class TestMoleculeDesigner:
             "smiles": "CCO",
             "constraints": {"max_mw": 500},
         })
-        assert result["designed_molecules"] == []
-        assert result["model_info"]["status"] in ("framework_only", "model_load_failed")
-        if result["model_info"]["status"] == "framework_only":
-            assert "deepchem" in result["model_info"]["required_packages"]
+        status = result["model_info"]["status"]
+        assert status in ("rdkit_fallback", "model_load_failed")
+        if status == "rdkit_fallback":
+            assert "strategy" in result["model_info"]
+            assert result["model_info"]["seed_smiles"] == "CCO"
 
     @pytest.mark.asyncio
     async def test_design_no_smiles(self):
@@ -52,9 +53,11 @@ class TestMoleculeDesigner:
 
         designer = MoleculeDesigner(db=MagicMock())
         result = await designer.design({"target_id": "t1"})
-        assert result["model_info"]["status"] in ("framework_only", "model_load_failed")
-        if result["model_info"]["status"] == "framework_only":
+        status = result["model_info"]["status"]
+        assert status in ("rdkit_fallback", "model_load_failed")
+        if status == "rdkit_fallback":
             assert result["model_info"]["seed_smiles"] is None
+            assert result["model_info"]["strategy"] == "fragment"
 
     def test_assess_druglikeness_valid_smiles(self):
         """RDKit 可用时验证真实 SMILES"""

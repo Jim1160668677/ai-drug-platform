@@ -55,6 +55,24 @@ export default function UserListCard() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 
+  const handleRoleChange = (userId: string, currentRole: string) => {
+    const select = document.createElement('select');
+    select.className = 'sr-only';
+    ROLE_OPTIONS.forEach((opt) => {
+      const option = document.createElement('option');
+      option.value = opt.value;
+      option.text = opt.label;
+      if (opt.value === currentRole) option.selected = true;
+      select.appendChild(option);
+    });
+    select.onchange = () => {
+      if (select.value && select.value !== currentRole) {
+        roleMutation.mutate({ userId, role: select.value });
+      }
+    };
+    select.click();
+  };
+
   return (
     <Card
       title={`用户列表 (${total})`}

@@ -37,6 +37,7 @@ class AnalysisJob(Base, UUIDMixin, TimestampMixin):
     model_used: Mapped[Optional[str]] = mapped_column(String(100))  # 使用的模型
     token_count: Mapped[Optional[int]] = mapped_column(Integer)
     error: Mapped[Optional[str]] = mapped_column(Text)
+    parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="分析参数（可重复性）")
     triggered_by: Mapped[Optional[UUIDType]] = mapped_column(ForeignKey("users.id"))
 
     def __repr__(self) -> str:

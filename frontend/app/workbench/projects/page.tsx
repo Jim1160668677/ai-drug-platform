@@ -33,7 +33,7 @@ export default function ProjectsPage() {
     patient_pseudonym: '',
   });
 
-  const { data: projects, isLoading } = useQuery({
+  const { data: projects, isLoading, isError, refetch } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
   });
@@ -63,7 +63,12 @@ export default function ProjectsPage() {
         </Button>
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="text-sm text-red-600 mb-3">数据加载失败</p>
+          <button onClick={() => refetch()} className="text-xs text-primary-600 underline">重试</button>
+        </div>
+      ) : isLoading ? (
         <Card className="p-8 text-center text-gray-500">加载中...</Card>
       ) : projectList.length === 0 ? (
         <Card className="p-8 text-center text-gray-500">

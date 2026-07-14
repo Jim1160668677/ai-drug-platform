@@ -38,14 +38,21 @@ def _detect_intent(message: str) -> str:
     return "general_qa"
 
 
-def _estimate_cost(usage: Dict, tier: str) -> float:
-    """根据 token 用量估算成本"""
+def _estimate_cost(usage: Dict, tier: str, model: str = "") -> float:
+    """根据 token 用量估算成本 — 优先使用 cost_tracker 定价表"""
     prompt_tokens = (usage or {}).get("prompt_tokens", 0)
     completion_tokens = (usage or {}).get("completion_tokens", 0)
+
+    try:
+        from app.services.llm.cost_tracker import _MODEL_PRICING
+        if model and model in _MODEL_PRICING:
+            in_price, out_price = _MODEL_PRICING[model]
+            return round((prompt_tokens * in_price + completion_tokens * out_price) / 1_000_000, 4)
+    except ImportError:
+        pass
+
     if tier == AnalysisTier.DEEP_INSIGHT:
-        # gpt-4o: $5/M input, $15/M output
         return round((prompt_tokens * 5 + completion_tokens * 15) / 1_000_000, 4)
-    # gpt-4o-mini: $0.15/M input, $0.60/M output
     return round((prompt_tokens * 0.15 + completion_tokens * 0.60) / 1_000_000, 4)
 
 
@@ -101,7 +108,7 @@ class LLMOrchestrator:
             answer, references, code, usage = await self._fast_screen(message, model)
 
         duration_sec = round(time.time() - start, 3)
-        cost_usd = _estimate_cost(usage, tier)
+        cost_usd = _estimate_cost(usage, tier, model)
 
         # 记录 AnalysisJob
         try:
@@ -290,7 +297,7 @@ class LLMOrchestrator:
                 status=JobStatus.COMPLETED,
                 input_params={"message": message[:500], "intent": intent},
                 result={"conclusion": conclusion[:500]},
-                cost_usd=_estimate_cost(response.get("usage"), tier),
+                cost_usd=_estimate_cost(response.get("usage"), tier, model),
                 duration_sec=int(duration_sec),
                 model_used=model,
                 token_count=(response.get("usage") or {}).get("prompt_tokens", 0)

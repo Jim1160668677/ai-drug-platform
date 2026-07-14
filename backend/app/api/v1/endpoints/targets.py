@@ -1,4 +1,5 @@
 """靶点端点 — AI 辅助靶点发现"""
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authz import apply_project_visibility
 from app.core.deps import get_current_user
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import AppException, ForbiddenError, NotFoundError
 from app.core.security import UserRole
 from app.db.session import get_db
 from app.models.project import Project
@@ -18,6 +19,7 @@ from app.api.v1.schemas import TargetResponse, StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/discover", response_model=StandardResponse, summary="靶点发现")
@@ -31,8 +33,18 @@ async def discover_targets(
     """从数据集中发现靶点 — 突变→注释→通路→证据分级"""
     from app.services.analyzer.target_identifier import TargetIdentifier
     identifier = TargetIdentifier(db)
-    result = await identifier.discover(project_id=project_id, dataset_id=dataset_id, tier=tier)
-    return StandardResponse(message=f"发现 {len(result.get('targets', []))} 个靶点", data=result)
+    try:
+        result = await identifier.discover(project_id=project_id, dataset_id=dataset_id, tier=tier)
+        return StandardResponse(message=f"发现 {len(result.get('targets', []))} 个靶点", data=result)
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"靶点发现失败: {e}", exc_info=True)
+        return StandardResponse(
+            success=False,
+            message=f"靶点发现失败: {str(e)}",
+            data={"project_id": str(project_id), "tier": tier, "error": str(e)},
+        )
 
 
 @router.get("", response_model=PagedResponse[TargetResponse], summary="靶点列表")
@@ -176,11 +188,21 @@ async def force_deep_analysis(
         raise NotFoundError("靶点不存在")
     from app.services.analyzer.target_identifier import TargetIdentifier
     identifier = TargetIdentifier(db)
-    result = await identifier.discover(
-        project_id=target.project_id,
-        dataset_id=None,
-        tier="deep_insight",
-    )
+    try:
+        result = await identifier.discover(
+            project_id=target.project_id,
+            dataset_id=None,
+            tier="deep_insight",
+        )
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"强制深度分析失败: {e}", exc_info=True)
+        return success_response({
+            "target_id": str(target_id),
+            "error": f"深度分析失败: {str(e)}",
+            "analysis": None,
+        })
     # 过滤出与当前靶点相关的分析结果（按 gene_symbol 匹配）
     target_gene = getattr(target, "gene_symbol", None) or getattr(target, "gene", None)
     all_targets = result.get("targets", [])

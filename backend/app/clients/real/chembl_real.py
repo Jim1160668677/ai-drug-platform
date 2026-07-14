@@ -1,19 +1,37 @@
-"""Real ChEMBL 客户端 — 调用 ebi.ac.uk/chembl API"""
+"""Real ChEMBL 客户端 — 调用 ebi.ac.uk/chembl API
+
+网络不可达时自动降级到 Mock 数据，保证用户体验。
+"""
+import logging
 from typing import Any, Dict, List
 
 from app.clients.base import ChemblClient
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+# 统一超时：连接 8s，读取 15s（避免前端 60s 超时）
+_TIMEOUT = httpx_timeout = 15.0
+_CONNECT_TIMEOUT = 8.0
+
 
 class RealChemblClient(ChemblClient):
-    """真实 ChEMBL 客户端 — 调用 https://www.ebi.ac.uk/chembl/api/data"""
+    """真实 ChEMBL 客户端 — 调用 https://www.ebi.ac.uk/chembl/api/data
+
+    网络不可达时自动降级到 MockChemblClient，保证功能可用。
+    """
+
+    def _get_mock_fallback(self) -> "ChemblClient":
+        """获取 Mock 回退客户端"""
+        from app.clients.mock.chembl_mock import MockChemblClient
+        return MockChemblClient()
 
     async def _find_target_chembl_id(self, gene_symbol: str) -> str:
         import httpx
 
         url = f"{settings.CHEMBL_BASE_URL}/target/search.json"
         params = {"q": gene_symbol, "target_type": "SINGLE PROTEIN", "limit": 5}
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, connect=_CONNECT_TIMEOUT) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
@@ -41,7 +59,7 @@ class RealChemblClient(ChemblClient):
             "limit": min(limit, 100),
             "standard_units": "nM",
         }
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, connect=_CONNECT_TIMEOUT) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
@@ -75,30 +93,35 @@ class RealChemblClient(ChemblClient):
     async def find_approved_drugs(self, target_gene: str) -> List[Dict[str, Any]]:
         import httpx
 
-        target_chembl_id = await self._find_target_chembl_id(target_gene)
-        if not target_chembl_id:
-            return []
+        try:
+            target_chembl_id = await self._find_target_chembl_id(target_gene)
+            if not target_chembl_id:
+                logger.warning(f"ChEMBL 未找到靶点 {target_gene}，降级到 Mock")
+                return await self._get_mock_fallback().find_approved_drugs(target_gene)
 
-        url = f"{settings.CHEMBL_BASE_URL}/drug_indication.json"
-        params = {"target_chembl_id": target_chembl_id, "max_phase": 4, "limit": 50}
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+            url = f"{settings.CHEMBL_BASE_URL}/drug_indication.json"
+            params = {"target_chembl_id": target_chembl_id, "max_phase": 4, "limit": 50}
+            async with httpx.AsyncClient(timeout=_TIMEOUT, connect=_CONNECT_TIMEOUT) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
 
-        indications = data.get("drug_indications", [])
-        approved = []
-        for di in indications:
-            approved.append({
-                "name": di.get("molecule_chembl_id"),
-                "chembl_id": di.get("molecule_chembl_id"),
-                "smiles": None,
-                "max_phase": di.get("max_phase_for_ind", 4),
-                "indication": di.get("mesh_heading") or di.get("efo_term"),
-                "first_approval": None,
-                "molecular_weight": None,
-                "drug_indication": [di.get("mesh_heading")],
-                "target_gene": target_gene,
-                "target_chembl_id": target_chembl_id,
-            })
-        return approved
+            indications = data.get("drug_indications", [])
+            approved = []
+            for di in indications:
+                approved.append({
+                    "name": di.get("molecule_chembl_id"),
+                    "chembl_id": di.get("molecule_chembl_id"),
+                    "smiles": None,
+                    "max_phase": di.get("max_phase_for_ind", 4),
+                    "indication": di.get("mesh_heading") or di.get("efo_term"),
+                    "first_approval": None,
+                    "molecular_weight": None,
+                    "drug_indication": [di.get("mesh_heading")],
+                    "target_gene": target_gene,
+                    "target_chembl_id": target_chembl_id,
+                })
+            return approved
+        except Exception as e:
+            logger.warning(f"ChEMBL 查询失败，降级到 Mock: {e}")
+            return await self._get_mock_fallback().find_approved_drugs(target_gene)

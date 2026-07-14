@@ -34,7 +34,7 @@ class RealLLMClient(LLMClient):
         timeout_sec: int = 60,
     ) -> None:
         # 回退到 settings 默认值（兼容旧调用方式）
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = (base_url or settings.LLM_BASE_URL or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or settings.OPENAI_API_KEY
         self.upstream_protocol = upstream_protocol or "chat_completions"
         self.default_model = default_model or settings.LLM_MODEL_DEEP

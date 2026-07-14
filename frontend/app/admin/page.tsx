@@ -13,13 +13,9 @@ export default function AdminPage() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    if (!isLoggedIn()) {
-      router.replace('/');
-      return;
-    }
     const u = getCurrentUser();
     setUser(u);
-  }, [router]);
+  }, []);
 
   if (!user) {
     return <div className="text-center py-12 text-gray-400">加载中...</div>;
@@ -106,6 +102,7 @@ export default function AdminPage() {
             <Link
               key={mod.href}
               href={mod.restricted ? '#' : mod.href}
+              prefetch={false}
               className={mod.restricted ? 'pointer-events-none' : ''}
             >
               <Card className={`p-6 h-full transition-shadow hover:shadow-md ${mod.restricted ? 'opacity-50' : ''}`}>

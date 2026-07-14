@@ -194,3 +194,47 @@ class FeedbackLoop:
             suggestions.append("建议增加 PDX 模型样本量以提高统计效力")
 
         return suggestions
+
+    async def apply_clinical_feedback(
+        self,
+        feedback_data: Dict[str, Any],
+        treatment_id: str,
+    ) -> Dict[str, Any]:
+        """应用临床反馈到闭环
+
+        1. 计算实际vs预期疗效差异
+        2. 记录不良反应
+        3. 触发方案优化建议
+        4. 关联实验数据（通过 treatment_id）
+        """
+        from app.models.treatment import Treatment
+        treatment = await self.db.get(Treatment, treatment_id)
+
+        expected_efficacy = (treatment.efficacy_score if treatment else 0.5) or 0.5
+        efficacy_map = {"complete": 1.0, "partial": 0.6, "stable": 0.4, "progressive": 0.1}
+        actual_efficacy = efficacy_map.get(feedback_data.get("efficacy", ""), 0.5)
+
+        efficacy_diff = actual_efficacy - expected_efficacy
+        adverse_reactions = feedback_data.get("adverse_reactions") or []
+
+        suggestions: List[str] = []
+        if efficacy_diff < -0.2:
+            suggestions.append("实际疗效显著低于预期，建议调整用药方案或更换药物")
+        elif efficacy_diff < 0:
+            suggestions.append("实际疗效略低于预期，建议微调剂量")
+        else:
+            suggestions.append("实际疗效符合或超过预期，方案有效")
+
+        if adverse_reactions:
+            suggestions.append(f"记录到 {len(adverse_reactions)} 项不良反应，建议评估风险收益比")
+
+        return {
+            "treatment_id": treatment_id,
+            "loop_stage": "clinical_validation",
+            "expected_efficacy": round(expected_efficacy, 3),
+            "actual_efficacy": round(actual_efficacy, 3),
+            "efficacy_diff": round(efficacy_diff, 3),
+            "adverse_reactions_count": len(adverse_reactions),
+            "optimization_suggestions": suggestions,
+            "next_stage": "dry_prediction_update",
+        }

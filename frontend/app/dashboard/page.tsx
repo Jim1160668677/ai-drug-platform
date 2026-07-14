@@ -20,6 +20,7 @@ import {
 import { getDashboardOverview } from '@/lib/api';
 import { getCurrentUser, isLoggedIn } from '@/lib/auth';
 import { useAppStore } from '@/lib/store';
+import { useMounted } from '@/lib/hooks/useMounted';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
@@ -28,18 +29,24 @@ import PlotlyChart from '@/components/charts/PlotlyChart';
 export default function DashboardPage() {
   const router = useRouter();
   const { setProject } = useAppStore();
-
-  useEffect(() => {
-    if (!isLoggedIn()) {
-      router.replace('/');
-    }
-  }, [router]);
+  const mounted = useMounted();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard-overview'],
     queryFn: getDashboardOverview,
-    enabled: isLoggedIn(),
+    enabled: mounted && isLoggedIn(),
   });
+
+  if (!mounted) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <Activity className="w-10 h-10 mx-auto mb-3 text-primary-500 animate-pulse" />
+          <div className="text-sm text-gray-500">加载中...</div>
+        </div>
+      </div>
+    );
+  }
 
   if (!isLoggedIn()) {
     return null;

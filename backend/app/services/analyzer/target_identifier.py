@@ -2,6 +2,7 @@
 
 流程：数据集 → 提取变异/差异基因 → 变异注释 → 基因查询 → PPI 扩展 → 评分分级 → 写库
 """
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -124,24 +125,35 @@ class TargetIdentifier:
             target_candidates = ["EGFR", "TP53", "KRAS"]
 
         # 5. 并发查询基因信息 + PPI 扩展
-        gene_infos: Dict[str, Dict] = {}
         gc = get_gene_client()
-        for gene in target_candidates:
+
+        async def _query_gene(gene: str):
             try:
-                info = await gc.query(gene)
-                gene_infos[gene] = info
+                return gene, await gc.query(gene)
             except Exception as e:
                 logger.warning(f"基因 {gene} 查询失败: {e}")
-                gene_infos[gene] = {"symbol": gene, "name": gene}
+                return gene, {"symbol": gene, "name": gene}
+
+        gene_results = await asyncio.gather(*[_query_gene(g) for g in target_candidates])
+        gene_infos: Dict[str, Dict] = dict(gene_results)
 
         # PPI 扩展（使用 KnowledgeGraph）
         ppi_neighbors: Dict[str, List] = {}
         try:
             from app.services.knowledge.graph import get_knowledge_graph
             kg = get_knowledge_graph()
-            for gene in target_candidates[:10]:  # 限制查询数
-                neighbors = await kg.get_neighbors(gene, depth=1)
-                ppi_neighbors[gene] = neighbors.get("neighbors", [])
+            ppi_genes = target_candidates[:10]
+
+            async def _query_ppi(gene: str):
+                try:
+                    neighbors = await kg.get_neighbors(gene, depth=1)
+                    return gene, neighbors.get("neighbors", [])
+                except Exception as e:
+                    logger.warning(f"PPI 邻居查询失败 {gene}: {e}")
+                    return gene, []
+
+            ppi_results = await asyncio.gather(*[_query_ppi(g) for g in ppi_genes])
+            ppi_neighbors = dict(ppi_results)
         except Exception as e:
             logger.warning(f"PPI 扩展失败: {e}")
 
@@ -149,18 +161,28 @@ class TargetIdentifier:
         approved_drugs_map: Dict[str, List] = {}
         try:
             cc = get_chembl_client()
-            for gene in target_candidates[:10]:
-                drugs = await cc.find_approved_drugs(gene)
-                approved_drugs_map[gene] = drugs
+            drug_genes = target_candidates[:10]
+
+            async def _query_drugs(gene: str):
+                try:
+                    return gene, await cc.find_approved_drugs(gene)
+                except Exception as e:
+                    logger.warning(f"药物查询失败 {gene}: {e}")
+                    return gene, []
+
+            drug_results = await asyncio.gather(*[_query_drugs(g) for g in drug_genes])
+            approved_drugs_map = dict(drug_results)
         except Exception as e:
             logger.warning(f"药物查询失败: {e}")
 
         # 6.5 PubMed 文献检索（spec 要求 4 个客户端：MyGene/ChEMBL/PubMed/MyVariant）
         pubmed_counts: Dict[str, int] = {}
         try:
-            for gene in target_candidates[:10]:
-                count = await self._query_pubmed(gene)
-                pubmed_counts[gene] = count
+            pubmed_genes = target_candidates[:10]
+            pubmed_results = await asyncio.gather(
+                *[self._query_pubmed(g) for g in pubmed_genes]
+            )
+            pubmed_counts = dict(zip(pubmed_genes, pubmed_results))
         except Exception as e:
             logger.warning(f"PubMed 检索失败: {e}")
 
@@ -238,18 +260,27 @@ class TargetIdentifier:
 
         await self.db.flush()
 
-        # 9. deep_insight 模式 — 调 LLM 生成深度分析
+        # 9. deep_insight 模式 — 调 LLM 生成深度分析（并发）
         if tier == "deep_insight":
             try:
                 llm = get_llm_client()
-                for td in targets_data[:5]:  # 前 5 个靶点深度分析
+                deep_targets = targets_data[:5]
+
+                async def _deep_analyze(td: Dict[str, Any]):
                     prompt = self._build_deep_analysis_prompt(td)
-                    response = await llm.chat([
-                        {"role": "system", "content": "你是精准医学专家，请基于变异注释、PPI 网络、已知药物信息进行深度靶点分析。"},
-                        {"role": "user", "content": prompt},
-                    ])
+                    response = await asyncio.wait_for(
+                        llm.chat([
+                            {"role": "system", "content": "你是精准医学专家，请基于变异注释、PPI 网络、已知药物信息进行深度靶点分析。"},
+                            {"role": "user", "content": prompt},
+                        ]),
+                        timeout=60.0,
+                    )
                     td["deep_analysis"] = response.get("content")
                     td["references"] = response.get("references", [])
+
+                await asyncio.gather(*[_deep_analyze(td) for td in deep_targets])
+            except asyncio.TimeoutError:
+                logger.warning("深度分析 LLM 调用超时（60s），跳过深度分析")
             except Exception as e:
                 logger.warning(f"深度分析失败: {e}")
 

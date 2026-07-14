@@ -32,6 +32,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'ai-drug-store',
+      skipHydration: true,
     }
   )
 );

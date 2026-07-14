@@ -1,6 +1,7 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
   Database,
@@ -12,33 +13,54 @@ import {
   MessageSquare,
   FileText,
   TrendingUp,
+  Zap,
+  AlertCircle,
 } from 'lucide-react';
-import { getProjects, getDatasets, getTargets, getExperiments } from '@/lib/api';
+import { getProjects, getDatasets, getTargets, getExperiments, runPipeline } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
+import { useNotificationStore } from '@/lib/notification';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
+import { LoadingCard } from '@/components/ui/Loading';
 
 export default function WorkbenchHome() {
   const { currentProject } = useAppStore();
   const projectId = currentProject?.id;
+  const queryClient = useQueryClient();
+  const showNotification = useNotificationStore((s) => s.showNotification);
+  const [pipelineResult, setPipelineResult] = useState<any>(null);
 
-  const { data: projects } = useQuery({ queryKey: ['projects'], queryFn: getProjects });
-  const { data: datasets } = useQuery({
+  const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: getProjects });
+  const datasetsQuery = useQuery({
     queryKey: ['datasets', projectId],
     queryFn: () => getDatasets(projectId),
     enabled: !!projectId,
   });
-  const { data: targets } = useQuery({
+  const targetsQuery = useQuery({
     queryKey: ['targets', projectId],
     queryFn: () => getTargets(projectId),
     enabled: !!projectId,
   });
-  const { data: experiments } = useQuery({
+  const experimentsQuery = useQuery({
     queryKey: ['experiments', projectId],
     queryFn: () => getExperiments(projectId),
     enabled: !!projectId,
   });
+
+  const projects = projectsQuery.data;
+  const datasets = datasetsQuery.data;
+  const targets = targetsQuery.data;
+  const experiments = experimentsQuery.data;
+
+  const statsLoading = projectsQuery.isLoading || datasetsQuery.isLoading || targetsQuery.isLoading || experimentsQuery.isLoading;
+  const statsError = projectsQuery.isError || datasetsQuery.isError || targetsQuery.isError || experimentsQuery.isError;
+  const refetchAll = () => {
+    projectsQuery.refetch();
+    datasetsQuery.refetch();
+    targetsQuery.refetch();
+    experimentsQuery.refetch();
+  };
 
   const stats = [
     { label: '项目数', value: projects?.length || 0, icon: GitBranch, color: 'text-primary-600 bg-primary-50' },
@@ -48,6 +70,24 @@ export default function WorkbenchHome() {
   ];
 
   const recentExperiments = (experiments || []).slice(0, 5);
+
+  const pipelineMutation = useMutation({
+    mutationFn: (pid: string) => runPipeline({ project_id: pid }),
+    onSuccess: (data) => {
+      const summary = data.summary || {};
+      showNotification({
+        type: 'success',
+        message: `流水线完成：靶点 ${summary.total_targets || 0}，分子 ${summary.total_molecules || 0}，方案 ${summary.total_treatments || 0}`,
+      });
+      setPipelineResult(data);
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['molecules'] });
+      queryClient.invalidateQueries({ queryKey: ['treatments'] });
+    },
+    onError: () => {
+      showNotification({ type: 'error', message: '流水线执行失败' });
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -62,24 +102,38 @@ export default function WorkbenchHome() {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((s) => {
-          const Icon = s.icon;
-          return (
-            <Card key={s.label}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-3xl font-bold text-gray-900">{s.value}</div>
-                  <div className="text-sm text-gray-500 mt-1">{s.label}</div>
+      {statsError ? (
+        <Card>
+          <div className="text-center py-8">
+            <AlertCircle className="w-10 h-10 mx-auto mb-2 text-red-400" />
+            <p className="text-sm text-gray-500 mb-3">统计数据加载失败</p>
+            <Button size="sm" variant="secondary" onClick={refetchAll}>重试</Button>
+          </div>
+        </Card>
+      ) : statsLoading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => <LoadingCard key={i} />)}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {stats.map((s) => {
+            const Icon = s.icon;
+            return (
+              <Card key={s.label}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-3xl font-bold text-gray-900">{s.value}</div>
+                    <div className="text-sm text-gray-500 mt-1">{s.label}</div>
+                  </div>
+                  <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${s.color}`}>
+                    <Icon className="w-6 h-6" />
+                  </div>
                 </div>
-                <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${s.color}`}>
-                  <Icon className="w-6 h-6" />
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       {/* 快速操作 */}
       <Card title="快速操作">
@@ -105,7 +159,75 @@ export default function WorkbenchHome() {
             </Button>
           </Link>
         </div>
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <Button
+            className="w-full"
+            disabled={!projectId || pipelineMutation.isPending}
+            onClick={() => projectId && pipelineMutation.mutate(projectId)}
+          >
+            <Zap className="w-4 h-4" />
+            {pipelineMutation.isPending ? '流水线运行中...' : '一键流水线（靶点→分子→治疗方案）'}
+          </Button>
+          {!projectId && (
+            <p className="text-xs text-gray-400 mt-2 text-center">请先选择项目</p>
+          )}
+        </div>
       </Card>
+
+      {/* 流水线结果 */}
+      {pipelineResult && (
+        <Card title="流水线执行结果">
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-primary-600">
+                  {pipelineResult.summary?.total_targets || 0}
+                </div>
+                <div className="text-xs text-gray-500">靶点</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-purple-600">
+                  {pipelineResult.summary?.total_molecules || 0}
+                </div>
+                <div className="text-xs text-gray-500">分子</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-emerald-600">
+                  {pipelineResult.summary?.total_treatments || 0}
+                </div>
+                <div className="text-xs text-gray-500">治疗方案</div>
+              </div>
+            </div>
+            <div className="text-xs text-gray-400 text-center">
+              总耗时 {pipelineResult.duration_sec?.toFixed(1) || 0}s
+            </div>
+            {pipelineResult.steps && (
+              <div className="space-y-1 mt-3">
+                {Object.entries(pipelineResult.steps).map(([key, step]: [string, any]) => (
+                  <div key={key} className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">
+                      {key === 'target_discovery' ? '靶点发现' :
+                       key === 'molecule_generation' ? '分子生成' :
+                       key === 'treatment_matching' ? '治疗方案' : key}
+                    </span>
+                    <Badge
+                      variant={
+                        step.status === 'success' ? 'green' :
+                        step.status === 'partial' ? 'yellow' :
+                        step.status === 'failed' ? 'red' : 'gray'
+                      }
+                    >
+                      {step.status === 'success' ? '成功' :
+                       step.status === 'partial' ? '部分成功' :
+                       step.status === 'failed' ? '失败' : '已跳过'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* 当前项目信息 + 最近活动 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

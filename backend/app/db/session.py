@@ -51,7 +51,7 @@ async def init_db() -> None:
     from app.models import (  # noqa: F401 — 确保所有模型被导入
         user, project, dataset, target, molecule,
         treatment, hypothesis, experiment, audit, analysis_job, workflow_run,
-        llm_config, report,
+        llm_config, report, data_lineage, consent,
     )
 
     async with engine.begin() as conn:

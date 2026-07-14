@@ -10,13 +10,13 @@ import Badge from '@/components/ui/Badge';
 export default function EfficacyPage() {
   const { currentProject } = useAppStore();
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const { data: summary, isLoading: summaryLoading, isError: summaryError, refetch: refetchSummary } = useQuery({
     queryKey: ['efficacy-summary', currentProject?.id],
     queryFn: () => getEfficacySummary(currentProject?.id),
     enabled: !!currentProject,
   });
 
-  const { data: recordsData, isLoading: recordsLoading } = useQuery({
+  const { data: recordsData, isLoading: recordsLoading, isError: recordsError, refetch: refetchRecords } = useQuery({
     queryKey: ['efficacy-records', currentProject?.id],
     queryFn: () => getEfficacyRecords({ project_id: currentProject?.id, limit: 50 }),
     enabled: !!currentProject,
@@ -75,6 +75,11 @@ export default function EfficacyPage() {
           <AlertCircle className="w-12 h-12 mx-auto mb-4 text-gray-300" />
           <p>请先选择项目</p>
         </Card>
+      ) : summaryError ? (
+        <Card className="p-8 text-center">
+          <p className="text-sm text-red-600 mb-3">汇总数据加载失败</p>
+          <button onClick={() => refetchSummary()} className="text-xs text-primary-600 underline">重试</button>
+        </Card>
       ) : summaryLoading ? (
         <Card className="p-8 text-center text-gray-500">加载汇总数据...</Card>
       ) : (
@@ -124,7 +129,9 @@ export default function EfficacyPage() {
 
           <Card className="p-5">
             <h3 className="font-semibold mb-3">疗效记录</h3>
-            {recordsLoading ? (
+            {recordsError ? (
+              <p className="text-center text-red-600 py-4">记录加载失败 <button onClick={() => refetchRecords()} className="text-xs text-primary-600 underline ml-2">重试</button></p>
+            ) : recordsLoading ? (
               <p className="text-center text-gray-500 py-4">加载记录...</p>
             ) : records.length === 0 ? (
               <p className="text-center text-gray-500 py-4">暂无疗效记录</p>

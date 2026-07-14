@@ -17,3 +17,14 @@ export const activateLLMConfig = (id: string) =>
 
 export const testLLMConfig = (payload: { config_id?: string; custom_message?: string }) =>
   api.post('/llm-configs/test', payload).then((r) => r.data);
+
+// ========== LLM 监控与缓存 ==========
+
+export const getLLMMetrics = (days = 7) =>
+  api.get('/llm-configs/metrics', { params: { days } }).then((r) => r.data?.data ?? r.data);
+
+export const getCacheStats = () =>
+  api.get('/llm-configs/cache/stats').then((r) => r.data?.data ?? r.data);
+
+export const invalidateCache = () =>
+  api.delete('/llm-configs/cache').then((r) => r.data?.data ?? r.data);

@@ -1,4 +1,5 @@
 """报告端点 — CDISC SDTM 导出与报告生成"""
+import logging
 from datetime import datetime
 from typing import Any, Dict
 from uuid import UUID
@@ -7,13 +8,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AppException, NotFoundError
 from app.db.session import get_db
 from app.models.user import User
 from app.api.v1.schemas import StandardResponse
 from app.schemas.common import ApiResponse, success_response
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/{project_id}/sdtm", summary="导出 CDISC SDTM")
@@ -31,9 +33,19 @@ async def export_sdtm(
     from app.services.cdisc.sdtm_exporter import SDTMExporter
     from fastapi.responses import PlainTextResponse
 
-    exporter = SDTMExporter(db)
-    sdtm_data = await exporter.export(project_id)
-    csv_content = exporter.to_csv(sdtm_data)
+    try:
+        exporter = SDTMExporter(db)
+        sdtm_data = await exporter.export(project_id)
+        csv_content = exporter.to_csv(sdtm_data)
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"SDTM 导出失败 (project={project_id}): {e}", exc_info=True)
+        return StandardResponse(
+            success=False,
+            message=f"SDTM 导出失败: {str(e)}",
+            data={"project_id": str(project_id), "error": str(e)},
+        )
 
     if format.lower() == "csv":
         return PlainTextResponse(
@@ -61,9 +73,58 @@ async def export_adam(
 ):
     """导出 CDISC ADaM 格式（用于统计分析）"""
     from app.services.cdisc.sdtm_exporter import SDTMExporter
-    exporter = SDTMExporter(db)
-    result = await exporter.export_adam(project_id)
+
+    try:
+        exporter = SDTMExporter(db)
+        result = await exporter.export_adam(project_id)
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"ADaM 导出失败 (project={project_id}): {e}", exc_info=True)
+        return StandardResponse(
+            success=False,
+            message=f"ADaM 导出失败: {str(e)}",
+            data={"project_id": str(project_id), "error": str(e)},
+        )
     return StandardResponse(message="ADaM 导出完成", data=result)
+
+
+@router.post("/{project_id}/fhir", response_model=StandardResponse, summary="导出 HL7 FHIR R4 Bundle")
+async def export_fhir(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """导出 HL7 FHIR R4 Bundle — 与 HIS/EMR 系统互操作
+
+    将项目数据映射为 FHIR R4 资源（Patient/Observation/Condition/MedicationStatement），
+    打包为 transaction 类型 Bundle 返回。
+    """
+    from app.services.cdisc.fhir_exporter import FHIRExporter
+
+    exporter = FHIRExporter(db)
+    bundle = await exporter.export_bundle(str(project_id))
+    return StandardResponse(message="FHIR R4 导出完成", data=bundle)
+
+
+@router.post("/{project_id}/sdtm/validate", response_model=StandardResponse, summary="SDTM 校验")
+async def validate_sdtm(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """校验 SDTM 数据 — 参考 Pinnacle 21 Community 核心规则集
+
+    先生成 SDTM 数据，再执行 8 条 FDA 核心校验规则（CG0001-CG0008）。
+    """
+    from app.services.cdisc.sdtm_exporter import SDTMExporter
+    from app.services.cdisc.sdtm_validator import SDTMValidator
+
+    exporter = SDTMExporter(db)
+    sdtm_data = await exporter.export(project_id)
+    validator = SDTMValidator()
+    result = validator.validate(sdtm_data)
+    return StandardResponse(message="SDTM 校验完成", data=result)
 
 
 @router.get("/{project_id}/summary", response_model=StandardResponse, summary="项目报告摘要")

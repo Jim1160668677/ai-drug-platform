@@ -13,7 +13,7 @@
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -474,3 +474,205 @@ async def transition_experiment(
         )
 
     return success_response(data=result)
+
+
+# ========== 患者用药反馈端点 ==========
+
+
+class PatientFeedbackCreate(BaseModel):
+    """患者用药反馈创建请求体"""
+
+    treatment_id: str = Field(..., description="关联的治疗方案 ID")
+    patient_code: Optional[str] = Field(None, description="患者编码（脱敏）")
+    age: Optional[int] = Field(None, ge=0, le=150, description="年龄")
+    gender: Optional[str] = Field(None, description="性别")
+    diagnosis: Optional[str] = Field(None, description="诊断")
+    stage: Optional[str] = Field(None, description="分期")
+    drug_name: Optional[str] = Field(None, description="药物名称")
+    dosage: Optional[str] = Field(None, description="剂量")
+    duration_days: Optional[int] = Field(None, ge=0, description="用药天数")
+    efficacy: Optional[str] = Field(
+        None,
+        description="疗效评价: complete/partial/stable/progressive",
+    )
+    tumor_shrinkage_pct: Optional[float] = Field(None, ge=-100, le=100, description="肿瘤缩小百分比")
+    pfs_days: Optional[int] = Field(None, ge=0, description="无进展生存期（天）")
+    os_days: Optional[int] = Field(None, ge=0, description="总生存期（天）")
+    adverse_events: Optional[List[Dict[str, Any]]] = Field(
+        None, description="不良反应列表 [{event, severity, action}]"
+    )
+    biomarker_changes: Optional[Dict[str, Any]] = Field(None, description="生物标志物变化")
+    notes: Optional[str] = Field(None, description="备注")
+
+
+@router.post("/patient", summary="提交患者用药反馈")
+async def create_patient_feedback(
+    payload: PatientFeedbackCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """提交患者用药反馈
+
+    录入患者基本信息、用药方案、治疗效果及不良反应等数据。
+    建立标准化的数据采集，实现实验数据与临床数据的有效关联。
+    """
+    from app.services.workflow.patient_feedback import PatientFeedbackService
+
+    try:
+        service = PatientFeedbackService(db)
+        feedback = await service.create(
+            treatment_id=payload.treatment_id,
+            patient_code=payload.patient_code,
+            age=payload.age,
+            gender=payload.gender,
+            diagnosis=payload.diagnosis,
+            stage=payload.stage,
+            drug_name=payload.drug_name,
+            dosage=payload.dosage,
+            duration_days=payload.duration_days,
+            efficacy=payload.efficacy,
+            tumor_shrinkage_pct=payload.tumor_shrinkage_pct,
+            pfs_days=payload.pfs_days,
+            os_days=payload.os_days,
+            adverse_events=payload.adverse_events,
+            biomarker_changes=payload.biomarker_changes,
+            notes=payload.notes,
+        )
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error("患者反馈创建失败: %s", e, exc_info=True)
+        raise UpstreamError(f"患者反馈创建失败: {e}", service="patient_feedback")
+
+    return success_response(data={
+        "id": str(feedback.id),
+        "treatment_id": feedback.treatment_id,
+        "patient_code": feedback.patient_code,
+        "efficacy": feedback.efficacy,
+        "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
+    })
+
+
+@router.get("/patient", summary="查询患者用药反馈列表")
+async def list_patient_feedback(
+    treatment_id: Optional[str] = Query(None, description="按治疗方案过滤"),
+    target_symbol: Optional[str] = Query(None, description="按靶点基因符号过滤"),
+    limit: int = Query(100, ge=1, le=500, description="返回条数上限"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询患者用药反馈列表
+
+    支持按治疗方案 ID 或靶点基因符号过滤。
+    """
+    from app.services.workflow.patient_feedback import PatientFeedbackService
+
+    service = PatientFeedbackService(db)
+
+    if target_symbol:
+        items = await service.list_by_target(target_symbol, limit)
+        return success_response(data={"items": items, "count": len(items), "filter": "target_symbol"})
+    elif treatment_id:
+        feedbacks = await service.list_by_treatment(treatment_id, limit)
+        items = [
+            {
+                "id": str(f.id),
+                "treatment_id": f.treatment_id,
+                "patient_code": f.patient_code,
+                "age": f.age,
+                "gender": f.gender,
+                "efficacy": f.efficacy,
+                "adverse_reactions": f.adverse_reactions,
+                "biomarker_changes": f.biomarker_changes,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+            }
+            for f in feedbacks
+        ]
+        return success_response(data={"items": items, "count": len(items), "filter": "treatment_id"})
+    else:
+        from sqlalchemy import select as _select
+        from app.models.treatment import ClinicalFeedback
+        result = await db.execute(
+            _select(ClinicalFeedback)
+            .order_by(ClinicalFeedback.created_at.desc())
+            .limit(limit)
+        )
+        feedbacks = list(result.scalars().all())
+        items = [
+            {
+                "id": str(f.id),
+                "treatment_id": f.treatment_id,
+                "patient_code": f.patient_code,
+                "age": f.age,
+                "gender": f.gender,
+                "efficacy": f.efficacy,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+            }
+            for f in feedbacks
+        ]
+        return success_response(data={"items": items, "count": len(items), "filter": "all"})
+
+
+@router.get("/patient/{feedback_id}", summary="患者反馈详情")
+async def get_patient_feedback(
+    feedback_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取患者用药反馈详情"""
+    from app.models.treatment import ClinicalFeedback
+
+    feedback = await db.get(ClinicalFeedback, feedback_id)
+    if not feedback:
+        raise NotFoundError(f"患者反馈不存在: {feedback_id}")
+
+    return success_response(data={
+        "id": str(feedback.id),
+        "treatment_id": feedback.treatment_id,
+        "patient_code": feedback.patient_code,
+        "age": feedback.age,
+        "gender": feedback.gender,
+        "dosage": feedback.dosage,
+        "duration_days": feedback.duration_days,
+        "efficacy": feedback.efficacy,
+        "adverse_reactions": feedback.adverse_reactions,
+        "biomarker_changes": feedback.biomarker_changes,
+        "notes": feedback.notes,
+        "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
+    })
+
+
+@router.get("/patient/stats/{target_symbol}", summary="按靶点统计有效率/不良反应率")
+async def get_patient_feedback_stats(
+    target_symbol: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按靶点统计患者用药反馈数据
+
+    返回有效率（complete+partial）、不良反应率、疗效分布。
+    """
+    from app.services.workflow.patient_feedback import PatientFeedbackService
+
+    service = PatientFeedbackService(db)
+    stats = await service.get_statistics(target_symbol)
+    return success_response(data=stats)
+
+
+@router.get("/patient/template", summary="下载标准化数据采集模板")
+async def download_patient_feedback_template(
+    current_user: User = Depends(get_current_user),
+):
+    """下载患者用药反馈标准化数据采集模板（CSV）
+
+    用于临床医生批量录入患者用药反馈数据。
+    """
+    from app.services.workflow.patient_feedback import PatientFeedbackService
+
+    content = PatientFeedbackService.generate_template("csv")
+    return success_response(data={
+        "format": "csv",
+        "size_bytes": len(content),
+        "preview": content[:500].decode("utf-8", errors="ignore"),
+        "instructions": "下载后删除注释行（#开头），填入数据后通过 /feedback/patient 端点批量提交",
+    })

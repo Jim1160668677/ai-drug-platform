@@ -23,6 +23,8 @@ _MODEL_PRICING: Dict[str, tuple] = {
     "claude-3-opus": (15.0, 75.0),
     "claude-3-sonnet": (3.0, 15.0),
     "claude-3-haiku": (0.25, 1.25),
+    "agnes-2.0-flash": (0.50, 1.50),
+    "agnes-2.0-pro": (2.0, 6.0),
 }
 
 
@@ -40,6 +42,8 @@ class CostTracker:
         self._spent: float = 0.0
         self._calls: int = 0
         self._by_model: Dict[str, float] = {}
+        self._by_user: Dict[str, float] = {}  # 按用户配额追踪
+        self._user_budget: float = getattr(settings, "LLM_USER_DAILY_BUDGET_USD", 10.0)
         self._redis = self._init_redis()
 
     @staticmethod
@@ -70,6 +74,7 @@ class CostTracker:
             self._spent = 0.0
             self._calls = 0
             self._by_model = {}
+            self._by_user = {}
             logger.info(f"CostTracker 跨日重置: {today}")
 
     def estimate_cost(self, model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -93,13 +98,21 @@ class CostTracker:
             self._maybe_reset()
             return (self._spent + amount) <= self.daily_budget
 
-    def record(self, model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    def can_user_spend(self, user_id: str, amount: float) -> bool:
+        """检查用户是否还能支出"""
+        with self._lock:
+            self._maybe_reset()
+            user_spent = self._by_user.get(user_id, 0.0)
+            return (user_spent + amount) <= self._user_budget
+
+    def record(self, model: str, prompt_tokens: int, completion_tokens: int, user_id: str = None) -> float:
         """记录一次调用
 
         Args:
             model: 模型名
             prompt_tokens: 输入 token 数
             completion_tokens: 输出 token 数
+            user_id: 用户 ID（可选，用于按用户配额追踪）
         Returns:
             本次成本（USD）
         """
@@ -109,6 +122,8 @@ class CostTracker:
             self._spent += cost
             self._calls += 1
             self._by_model[model] = self._by_model.get(model, 0.0) + cost
+            if user_id:
+                self._by_user[user_id] = self._by_user.get(user_id, 0.0) + cost
         logger.debug(
             f"CostTracker record: model={model} cost=${cost:.4f} "
             f"today_total=${self._spent:.4f}/{self.daily_budget}"
@@ -127,6 +142,8 @@ class CostTracker:
                 "utilization": round(self._spent / self.daily_budget, 4) if self.daily_budget else 0,
                 "calls": self._calls,
                 "by_model": {k: round(v, 4) for k, v in self._by_model.items()},
+                "by_user": {k: round(v, 4) for k, v in self._by_user.items()},
+                "user_budget_usd": self._user_budget,
             }
 
 

@@ -25,6 +25,7 @@ from app.models.base import Base  # noqa: E402
 from app.models import (  # noqa: E402, F401 — 确保所有模型注册
     user, project, dataset, target, molecule,
     treatment, hypothesis, experiment, audit, analysis_job, workflow_run,
+    data_lineage, consent,
 )
 
 

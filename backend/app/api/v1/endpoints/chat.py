@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, get_llm_client
+from app.core.deps import get_current_user, get_llm_client_with_config, get_active_llm_config
 from app.db.session import get_db
 from app.models.audit import AuditLog
 from app.models.user import User
@@ -31,7 +31,9 @@ async def chat(
     - deep_insight: 深度洞察 (<$20/<30min) — LLM+RAG+网络分析+分子建模
     """
     from app.services.llm.orchestrator import LLMOrchestrator
-    orchestrator = LLMOrchestrator(db, get_llm_client())
+    llm_config = await get_active_llm_config(db)
+    llm_client = await get_llm_client_with_config(db)
+    orchestrator = LLMOrchestrator(db, llm_client, llm_config=llm_config)
     result = await orchestrator.route(
         message=payload.message,
         project_id=payload.project_id,
@@ -77,7 +79,9 @@ async def analyze_with_nl(
     报告包含：结论、交互式图表、AI 生成的分析代码（Python）
     """
     from app.services.llm.orchestrator import LLMOrchestrator
-    orchestrator = LLMOrchestrator(db, get_llm_client())
+    llm_config = await get_active_llm_config(db)
+    llm_client = await get_llm_client_with_config(db)
+    orchestrator = LLMOrchestrator(db, llm_client, llm_config=llm_config)
     result = await orchestrator.full_analysis(
         message=message,
         project_id=project_id,

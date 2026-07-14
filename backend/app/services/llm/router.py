@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 
 from app.core.config import settings
 from app.models.analysis_job import AnalysisTier
+from app.services.llm.cache import LLMResponseCache, get_cache
 from app.services.llm.cost_tracker import CostTracker, get_cost_tracker
 from app.services.llm.guardrail import Guardrail, GuardrailResult, get_guardrail
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 class LLMRouter:
     """LLM 多模型路由器
 
-    根据 tier 路由到不同模型，集成成本追踪和安全护栏。
+    根据 tier 路由到不同模型，集成成本追踪、安全护栏和响应缓存。
 
     Usage:
         router = LLMRouter(llm_client, llm_config=db_config)
@@ -37,6 +38,7 @@ class LLMRouter:
         llm_config=None,
         cost_tracker: Optional[CostTracker] = None,
         guardrail: Optional[Guardrail] = None,
+        cache: Optional[LLMResponseCache] = None,
     ):
         """
         Args:
@@ -44,11 +46,13 @@ class LLMRouter:
             llm_config: 数据库激活的 LLMConfig（可选）
             cost_tracker: 成本追踪器（默认使用单例）
             guardrail: 安全护栏（默认使用单例）
+            cache: 响应缓存（默认使用单例）
         """
         self.llm_client = llm_client
         self.llm_config = llm_config
         self.cost_tracker = cost_tracker or get_cost_tracker()
         self.guardrail = guardrail or get_guardrail()
+        self.cache = cache or get_cache()
 
     def select_model(self, tier: str) -> str:
         """根据 tier 选择模型
@@ -126,7 +130,13 @@ class LLMRouter:
         else:
             effective_prompt = prompt
 
-        # 2. 调用 LLM
+        # 2. 查询缓存（仅 fast_screen 层）
+        cached = await self.cache.get(prompt, tier, system)
+        if cached is not None:
+            logger.info(f"LLMRouter 缓存命中，跳过 LLM 调用")
+            return cached
+
+        # 3. 调用 LLM
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -175,7 +185,7 @@ class LLMRouter:
             logger.warning("LLM 日预算已耗尽，本次不计费但已调用")
 
         duration_sec = round(time.time() - start, 3)
-        return {
+        result = {
             "content": content,
             "model": model,
             "usage": usage,
@@ -185,6 +195,11 @@ class LLMRouter:
             "code": response.get("code"),
             "duration_sec": duration_sec,
         }
+
+        # 5. 写入缓存
+        await self.cache.set(prompt, tier, result, system)
+
+        return result
 
 
 def _guardrail_to_dict(result: GuardrailResult) -> Dict[str, Any]:

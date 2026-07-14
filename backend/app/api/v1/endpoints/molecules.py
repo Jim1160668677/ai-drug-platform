@@ -1,4 +1,5 @@
 """分子端点 — 分子设计与对接"""
+import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from app.models.user import User
 from app.api.v1.schemas import MoleculeResponse, StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -191,6 +193,52 @@ async def design_molecule(
     return StandardResponse(message="分子设计完成", data=result)
 
 
+@router.post("/design-multi-target", response_model=ApiResponse[Dict[str, Any]], summary="多靶点协同分子设计")
+async def design_multi_target_molecules(
+    targets: List[Dict[str, Any]] = Body(..., embed=True, description="靶点列表 [{target_id, name, binding_site, weight, gene_symbol, pdb_id}]"),
+    seed_smiles: str = Body(None, embed=True),
+    constraints: dict = Body(None, embed=True),
+    n_molecules: int = Body(10, embed=True),
+    use_llm: bool = Body(False, embed=True, description="是否启用 LLM 辅助设计"),
+    use_docking: bool = Body(False, embed=True, description="是否启用 DiffDock 对接（Mock 模式）"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """多靶点协同分子设计
+
+    支持同时输入多个药物靶点信息，基于多靶点相互作用机制进行药物分子设计。
+    每个分子结果单独成行，包含分子结构(SMILES + 结构图)、理化性质、各靶点结合亲和力（列表）、综合评分、设计理由。
+
+    可选功能：
+    - use_llm=True: 启用 LLM 辅助生成候选分子（需要 Agnes API 配置）
+    - use_docking=True: 启用 DiffDock 对接计算真实亲和力（NVIDIA_NIM_API_KEY 配置时，否则 Mock）
+    """
+    if not targets or len(targets) < 1:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("至少需要提供 1 个靶点")
+    if len(targets) > 10:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("靶点数量不能超过 10 个")
+
+    from app.services.analyzer.molecule_designer import MoleculeDesigner
+    designer = MoleculeDesigner(db)
+
+    # 获取 LLM 客户端（如启用）
+    llm_client = None
+    if use_llm:
+        try:
+            from app.services.llm.client import get_llm_client_with_config
+            llm_client, _ = await get_llm_client_with_config(db)
+        except Exception as e:
+            logger.warning(f"LLM 客户端获取失败，降级规则生成: {e}")
+
+    result = await designer.design_multi_target(
+        targets, seed_smiles, constraints, n_molecules,
+        use_llm=use_llm, use_docking=use_docking, llm_client=llm_client,
+    )
+    return success_response(result)
+
+
 @router.post("/{molecule_id}/dock", response_model=StandardResponse, summary="分子对接（P2）")
 async def dock_molecule(
     molecule_id: UUID,
@@ -315,6 +363,34 @@ async def get_molecule(
             if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
                 raise ForbiddenError("无权访问此资源")
     return MoleculeResponse.model_validate(mol)
+
+
+@router.delete("/{molecule_id}", response_model=ApiResponse[Dict[str, Any]], summary="删除分子")
+async def delete_molecule(
+    molecule_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除分子（仅 FOUNDER 或分子所属项目拥有者可删除）"""
+    mol = await db.get(Molecule, molecule_id)
+    if not mol:
+        raise NotFoundError("分子不存在")
+    # 权限校验：与 get_molecule 一致
+    if not mol.target_id:
+        if current_user.role != UserRole.FOUNDER:
+            raise ForbiddenError("无权删除此资源")
+    else:
+        target = await db.get(Target, mol.target_id)
+        if not target:
+            if current_user.role != UserRole.FOUNDER:
+                raise ForbiddenError("无权删除此资源")
+        else:
+            project = await db.get(Project, target.project_id)
+            if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
+                raise ForbiddenError("无权删除此资源")
+    await db.delete(mol)
+    await db.commit()
+    return success_response({"id": str(molecule_id), "deleted": True})
 
 
 @router.get("/{molecule_id}/docking-results", response_model=ApiResponse[Dict[str, Any]], summary="对接结果")

@@ -24,5 +24,9 @@ export * from './llm-config';
 export * from './federated';
 export * from './privacy';
 export * from './efficacy';
+export * from './pipeline';
+export * from './ws';
+export * from './lineage';
+export * from './consent';
 
 export type { ApiResponse, PagedResponse, ErrorResponse, StandardResponse } from './types';

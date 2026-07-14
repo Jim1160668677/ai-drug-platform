@@ -1,4 +1,5 @@
 """假设端点 — 多假设并行管理（Hypothesis Sandbox）"""
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -17,6 +18,7 @@ from app.models.user import User
 from app.api.v1.schemas import HypothesisCreate, HypothesisResponse, StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -218,3 +220,65 @@ async def eliminate_hypothesis(
         "status": "eliminated",
         "reason": reason,
     })
+
+
+@router.delete("/{hypothesis_id}", response_model=ApiResponse[Dict[str, Any]], summary="删除假设")
+async def delete_hypothesis(
+    hypothesis_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除假设（永久删除）"""
+    hypothesis = await db.get(Hypothesis, hypothesis_id)
+    if not hypothesis:
+        raise NotFoundError("假设不存在")
+    if current_user.role != UserRole.FOUNDER and hypothesis.created_by != current_user.id:
+        raise ForbiddenError("无权删除此资源")
+    await db.delete(hypothesis)
+    await db.commit()
+    return success_response({"id": str(hypothesis_id), "deleted": True})
+
+
+@router.post("/auto-generate", response_model=ApiResponse[List[Dict[str, Any]]], summary="自动生成假设")
+async def auto_generate_hypotheses(
+    project_id: UUID = Body(..., embed=True, description="项目 ID"),
+    max_hypotheses: int = Body(5, embed=True, description="最大假设数量"),
+    context: dict = Body(None, embed=True, description="可选上下文数据"),
+    use_llm: bool = Body(True, embed=True, description="是否启用 LLM 辅助生成（默认启用）"),
+    mode: str = Body("hybrid", embed=True, description="生成模式: rule(仅规则)/llm(仅LLM)/hybrid(混合)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """基于前期分析结果自动生成研究假设
+
+    系统提取并分析前面各模块产生的关键数据与结论，运用规则推理方法，
+    自动生成科学合理的研究假设，包含假设描述、支持证据、预期验证方法等内容。
+
+    数据源：
+    - 差异表达分析结果
+    - 通路富集结果
+    - 分子设计结果
+    - 治疗方案效果数据
+    - 临床反馈数据
+
+    可选功能：
+    - use_llm=True: 启用 LLM 辅助生成更丰富的假设（需要 Agnes API 配置）
+    - mode: rule(仅规则) / llm(仅 LLM) / hybrid(混合，默认)
+    """
+    from app.services.knowledge.hypothesis_generator import HypothesisGenerator
+    generator = HypothesisGenerator(db)
+
+    # 获取 LLM 客户端（如启用）
+    llm_client = None
+    if use_llm:
+        try:
+            from app.services.llm.client import get_llm_client_with_config
+            llm_client, _ = await get_llm_client_with_config(db)
+        except Exception as e:
+            logger.warning(f"LLM 客户端获取失败，降级规则生成: {e}")
+
+    hypotheses = await generator.generate(
+        str(project_id), context, max_hypotheses,
+        use_llm=use_llm, llm_client=llm_client, mode=mode,
+    )
+    return success_response(hypotheses)

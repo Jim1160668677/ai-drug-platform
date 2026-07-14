@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     hypotheses, experiments, workflows, reports,
     knowledge, chat, audit, dashboard, llm_config, users,
     feedback, federated, privacy, efficacy, ws,
+    pipeline, lineage, consent,
 )
 
 api_router = APIRouter()
@@ -34,6 +35,15 @@ api_router.include_router(federated.router, prefix="/federated", tags=["联邦�
 api_router.include_router(privacy.router, prefix="/privacy", tags=["隐私计算"])
 api_router.include_router(efficacy.router, prefix="/efficacy", tags=["疗效监测"])
 api_router.include_router(ws.router, prefix="", tags=["WebSocket"])
+
+# 端到端流水线
+api_router.include_router(pipeline.router, prefix="/pipeline", tags=["端到端流水线"])
+
+# 数据血缘
+api_router.include_router(lineage.router, prefix="/lineage", tags=["数据血缘"])
+
+# 知情同意
+api_router.include_router(consent.router, prefix="/consent", tags=["知情同意"])
 
 # 路径别名 — 旧前端兼容（保留 1 版本周期，include_in_schema=False 避免文档重复）
 api_router.include_router(data.router, prefix="/datasets", tags=["数据接入"], include_in_schema=False)

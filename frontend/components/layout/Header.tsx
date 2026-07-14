@@ -7,11 +7,13 @@ import clsx from 'clsx';
 import { getProjects } from '@/lib/api';
 import { logout, getCurrentUser } from '@/lib/auth';
 import { useAppStore } from '@/lib/store';
+import { useMounted } from '@/lib/hooks/useMounted';
 import Badge from '@/components/ui/Badge';
 
 export default function Header() {
   const [open, setOpen] = useState(false);
   const { currentProject, setProject, user, setUser } = useAppStore();
+  const mounted = useMounted();
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
@@ -79,10 +81,10 @@ export default function Header() {
               <User className="w-4 h-4" />
             </div>
             <div className="text-left">
-              <div className="text-sm font-medium">{user?.name || '用户'}</div>
-              <div className="text-xs text-gray-500">{user?.email}</div>
+              <div className="text-sm font-medium">{mounted ? (user?.name || '用户') : '用户'}</div>
+              <div className="text-xs text-gray-500">{mounted ? user?.email : ''}</div>
             </div>
-            {user?.role && <Badge variant="role" value={user.role} />}
+            {mounted && user?.role && <Badge variant="role" value={user.role} />}
             <ChevronDown className="w-4 h-4 text-gray-400" />
           </button>
 

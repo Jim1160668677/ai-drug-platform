@@ -9,13 +9,13 @@ import Badge from '@/components/ui/Badge';
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1';
 
 export default function MonitorPage() {
-  const { data: health, isLoading: healthLoading } = useQuery({
+  const { data: health, isLoading: healthLoading, isError: healthError, refetch: refetchHealth } = useQuery({
     queryKey: ['health'],
     queryFn: () => axios.get(`${API_BASE}/health`).then((r) => r.data),
     refetchInterval: 30000,
   });
 
-  const { data: costSummary } = useQuery({
+  const { data: costSummary, isError: costError, refetch: refetchCost } = useQuery({
     queryKey: ['cost-summary'],
     queryFn: () => axios.get(`${API_BASE}/chat/cost-summary`, {
       headers: typeof window !== 'undefined' ? { Authorization: `Bearer ${localStorage.getItem('ai_drug_token')}` } : {},
@@ -93,7 +93,9 @@ export default function MonitorPage() {
             <Server className="w-5 h-5 text-blue-500" />
             <h3 className="font-semibold">服务状态</h3>
           </div>
-          {healthLoading ? (
+          {healthError ? (
+            <p className="text-center text-red-600 py-4">服务状态加载失败 <button onClick={() => refetchHealth()} className="text-xs text-primary-600 underline ml-2">重试</button></p>
+          ) : healthLoading ? (
             <p className="text-center text-gray-500 py-4">加载中...</p>
           ) : serviceEntries.length === 0 ? (
             <p className="text-center text-gray-500 py-4">暂无服务信息</p>

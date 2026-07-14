@@ -20,6 +20,8 @@ import {
   Lock,
   Activity,
   FolderKanban,
+  Share2,
+  ShieldCheck,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAppStore } from '@/lib/store';
@@ -46,10 +48,12 @@ const NAV_ITEMS: NavItem[] = [
   },
   { href: '/workbench/hypotheses', label: '多假设并行', icon: GitBranch },
   { href: '/workbench/experiments', label: '干湿闭环', icon: FlaskConical },
+  { href: '/workbench/lineage', label: '数据血缘', icon: Share2 },
   { href: '/workbench/chat', label: 'AI 问答', icon: MessageSquare },
   { href: '/workbench/federated', label: '联邦学习', icon: Network, roles: ['founder', 'chief', 'engineer'] },
   { href: '/workbench/privacy', label: '隐私计算', icon: Lock, roles: ['founder', 'chief', 'engineer'] },
   { href: '/workbench/efficacy', label: '疗效监测', icon: Activity, roles: ['founder', 'chief', 'doctor'] },
+  { href: '/workbench/consent', label: '知情同意', icon: ShieldCheck, roles: ['founder', 'chief', 'doctor'] },
   { href: '/workbench/monitor', label: '系统监控', icon: Activity, roles: ['founder', 'chief', 'engineer'] },
   { href: '/reports', label: '报告中心', icon: FileText },
   {

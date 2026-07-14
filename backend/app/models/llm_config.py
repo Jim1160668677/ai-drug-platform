@@ -58,6 +58,10 @@ class LLMConfig(UUIDMixin, TimestampMixin, Base):
     fast_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="快速筛查模型")
     deep_model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="深度洞察模型")
 
+    # 版本管理
+    version: Mapped[str] = mapped_column(String(32), default="1.0.0", nullable=False, comment="配置版本号")
+    parent_config_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, comment="前一版本配置 ID（版本链）")
+
     # 参数
     temperature: Mapped[float] = mapped_column(default=0.7, nullable=False, comment="温度")
     max_tokens: Mapped[int] = mapped_column(default=2000, nullable=False, comment="最大 token 数")

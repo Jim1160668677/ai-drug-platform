@@ -179,8 +179,8 @@ def _get_request_id_safe(request: Request) -> str:
         rid = get_request_id()
         if rid:
             return rid
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"get_request_id 降级（中间件可能未启用）: {e}")
     # 回退到请求头
     rid = request.headers.get("X-Request-ID")
     if rid:

@@ -73,6 +73,343 @@ class MoleculeDesigner:
             },
         }
 
+    async def design_multi_target(
+        self,
+        targets: List[Dict[str, Any]],
+        seed_smiles: Optional[str] = None,
+        constraints: Optional[Dict[str, Any]] = None,
+        n_molecules: int = 10,
+        use_llm: bool = False,
+        use_docking: bool = False,
+        llm_client: Any = None,
+    ) -> Dict[str, Any]:
+        """多靶点协同分子设计
+
+        策略：
+        1. 为所有靶点联合生成候选分子（基于片段组合或种子优化）
+        2. 可选：LLM 辅助生成候选分子（use_llm=True 且 llm_client 提供时）
+        3. 计算每个分子对所有靶点的结合亲和力（Mock 或 DiffDock）
+        4. 按"多靶点综合评分"排序（加权平均亲和力 × 类药性评分）
+        5. 每个分子单独成行，包含 SMILES、结构图、理化性质、各靶点亲和力（列表格式）、综合评分、设计理由
+
+        Args:
+            targets: [{target_id, name, binding_site, weight, gene_symbol, pdb_id}]，weight 默认 1.0
+            seed_smiles: 种子分子（可选）
+            constraints: 约束条件
+            n_molecules: 返回分子数量
+            use_llm: 是否启用 LLM 辅助设计（默认 False）
+            use_docking: 是否启用 DiffDock 对接（默认 False，Mock 模式）
+            llm_client: LLM 客户端实例（use_llm=True 时必需）
+        Returns:
+            {designed_molecules: [{smiles, structure_image, properties, target_affinities(list), composite_score, design_rationale}], model_info}
+        """
+        constraints = constraints or {}
+        # 归一化权重
+        total_weight = sum(t.get("weight", 1.0) for t in targets) or len(targets)
+        for t in targets:
+            t["weight"] = t.get("weight", 1.0) / total_weight
+
+        # 生成候选分子池（为多靶点联合生成更多候选）
+        strategy = "optimization" if seed_smiles else "fragment"
+        gen_result = await self.generate_molecules(
+            target_id="multi_target",
+            strategy=strategy,
+            n=n_molecules * 3,  # 生成更多候选以筛选
+            seed_smiles=seed_smiles,
+            constraints=constraints,
+        )
+        candidates = gen_result.get("molecules", [])
+
+        # 可选：LLM 辅助生成候选分子
+        llm_rationales: Dict[str, str] = {}
+        if use_llm and llm_client is not None:
+            try:
+                llm_result = await self.llm_assisted_design(targets, constraints, llm_client)
+                if llm_result.get("status") == "success":
+                    for mol in llm_result.get("molecules", []):
+                        smiles = mol.get("smiles", "")
+                        if smiles and smiles not in [c.get("smiles") for c in candidates]:
+                            candidates.append({
+                                "smiles": smiles,
+                                "source": "llm",
+                                "fragments": [],
+                            })
+                        llm_rationales[smiles] = mol.get("design_rationale", "")
+            except Exception as e:
+                logger.warning(f"LLM 辅助设计失败，降级规则生成: {e}")
+
+        # 为每个分子计算多靶点亲和力和理化性质
+        designed = []
+        for mol in candidates:
+            smiles = mol.get("smiles", "")
+            if not smiles:
+                continue
+            props = assess_druglikeness(smiles)
+            if props.get("error"):
+                continue
+
+            # 计算对每个靶点的亲和力（列表格式，每个靶点单独成行）
+            target_affinities: List[Dict[str, Any]] = []
+            weighted_affinity = 0.0
+            for t in targets:
+                if use_docking:
+                    dock_result = await self.dock_molecule(
+                        smiles, t.get("pdb_id", ""), t.get("name", "")
+                    )
+                    affinity_val = dock_result.get("affinity", -7.0)
+                    confidence = dock_result.get("confidence", 0.7)
+                    source = dock_result.get("source", "mock")
+                else:
+                    affinity_val = self._compute_affinity(smiles, t.get("binding_site", ""), t.get("name", ""))
+                    confidence = round(affinity_val, 2)
+                    source = "mock_score"
+                target_affinities.append({
+                    "target_id": t.get("target_id", ""),
+                    "gene_symbol": t.get("gene_symbol", t.get("name", "")),
+                    "target_name": t.get("name", ""),
+                    "affinity": affinity_val,
+                    "confidence": confidence,
+                    "source": source,
+                })
+                # 归一化 affinity 到 0-1 范围用于综合评分
+                norm_affinity = max(0.0, min(1.0, (affinity_val + 12) / 12)) if affinity_val < 0 else affinity_val
+                weighted_affinity += norm_affinity * t["weight"]
+
+            # 综合评分 = 加权平均亲和力 × 类药性评分（归一化到 0-1）
+            drug_score = props.get("druglikeness_score", 0) / 100.0
+            composite_score = round(weighted_affinity * drug_score, 4)
+
+            # 生成分子结构图（base64 PNG，rdkit 不可用时为 None）
+            structure_image = self._generate_structure_image(smiles)
+
+            designed.append({
+                "smiles": smiles,
+                "name": mol.get("name", ""),
+                "structure_image": structure_image,
+                "source": mol.get("source", strategy),
+                "properties": props,
+                "target_affinities": target_affinities,
+                "composite_score": composite_score,
+                "weighted_affinity": round(weighted_affinity, 4),
+                "design_rationale": llm_rationales.get(smiles, ""),
+            })
+
+        # 按综合评分降序排序，取前 n_molecules 个
+        designed.sort(key=lambda m: m["composite_score"], reverse=True)
+        designed = designed[:n_molecules]
+
+        return {
+            "designed_molecules": designed,
+            "model_info": {
+                "status": "multi_target_mock" if not self._deepchem_available() else "multi_target_deepchem",
+                "message": f"多靶点协同设计：{len(targets)} 个靶点，生成 {len(designed)} 个候选分子",
+                "targets": [{"target_id": t["target_id"], "name": t.get("name", ""), "weight": round(t["weight"], 4)} for t in targets],
+                "strategy": strategy,
+                "seed_smiles": seed_smiles,
+                "constraints": constraints,
+                "use_llm": use_llm,
+                "use_docking": use_docking,
+                "llm_molecules_count": len(llm_rationales),
+            },
+        }
+
+    def _compute_affinity(self, smiles: str, binding_site: str, target_name: str) -> float:
+        """计算分子对靶点的结合亲和力（Mock 实现）
+
+        真实实现应使用分子对接（DiffDock）或 ML 预测模型。
+        Mock 策略：基于 binding_site 片段在 SMILES 中的匹配度 + 随机因子
+
+        Returns:
+            亲和力评分 0.0-1.0（越高越好）
+        """
+        import random
+
+        if not smiles:
+            return 0.0
+
+        # 基础分：0.3-0.8 之间的随机值
+        base_score = 0.3 + random.random() * 0.5
+
+        # 如果有 binding_site 信息，检查片段匹配
+        if binding_site:
+            # 简化：检查 binding_site 中的字符在 smiles 中的出现比例
+            site_chars = set(binding_site.lower())
+            smiles_chars = set(smiles.lower())
+            if site_chars:
+                match_ratio = len(site_chars & smiles_chars) / len(site_chars)
+                base_score = min(1.0, base_score + match_ratio * 0.2)
+
+        # 如果有靶点名称，添加名称相关的微调
+        if target_name:
+            # 简化：靶点名称长度作为微小因子
+            name_factor = min(0.1, len(target_name) / 100)
+            base_score = min(1.0, base_score + name_factor)
+
+        return round(base_score, 4)
+
+    async def dock_molecule(
+        self,
+        smiles: str,
+        target_pdb_id: str = "",
+        target_name: str = "",
+    ) -> Dict[str, Any]:
+        """分子对接 — DiffDock Mock/Real 双模式
+
+        Args:
+            smiles: 配体 SMILES
+            target_pdb_id: 受体 PDB ID（如 "1M17"）
+            target_name: 靶点名称（用于日志）
+        Returns:
+            {affinity, binding_pose, confidence, source}
+            source 为 "diffdock" 或 "mock"
+        """
+        import random
+
+        from app.core.config import settings
+        nim_key = getattr(settings, "NVIDIA_NIM_API_KEY", "") or ""
+
+        if nim_key and target_pdb_id:
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://integrate.api.nvidia.com/v1/diffdock",
+                        headers={
+                            "Authorization": f"Bearer {nim_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"ligand": smiles, "receptor": target_pdb_id},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return {
+                        "affinity": float(data.get("affinity", -7.0)),
+                        "binding_pose": data.get("pose", {}),
+                        "confidence": float(data.get("confidence", 0.7)),
+                        "source": "diffdock",
+                    }
+            except Exception as e:
+                logger.warning(f"DiffDock API 失败，降级 Mock: {e}")
+
+        # Mock 模式：基于 binding_site 匹配度生成亲和力
+        base_affinity = -random.uniform(6.0, 11.0)
+        confidence = round(random.uniform(0.5, 0.9), 2)
+        return {
+            "affinity": round(base_affinity, 2),
+            "binding_pose": {
+                "rmsd": round(random.uniform(0.5, 3.0), 2),
+                "target_pdb_id": target_pdb_id,
+            },
+            "confidence": confidence,
+            "source": "mock",
+        }
+
+    async def llm_assisted_design(
+        self,
+        targets: List[Dict[str, Any]],
+        constraints: Optional[Dict[str, Any]] = None,
+        llm_client: Any = None,
+    ) -> Dict[str, Any]:
+        """LLM 辅助分子设计 — 基于靶点信息生成候选分子
+
+        Args:
+            targets: 靶点列表 [{target_id, name, binding_site}]
+            constraints: 约束条件 {mw_max, logp_max, ...}
+            llm_client: LLM 客户端（如未提供则返回空结果）
+        Returns:
+            {molecules: [{smiles, design_rationale, source: "llm"}], status}
+        """
+        if llm_client is None:
+            return {"molecules": [], "status": "no_llm_client"}
+
+        target_info = "\n".join(
+            f"- 靶点 {t.get('name', '未知')}: 结合位点 {t.get('binding_site', '未知')}"
+            for t in targets[:5]
+        )
+        constraint_info = ""
+        if constraints:
+            constraint_info = f"\n约束条件: MW<{constraints.get('mw_max', 500)}, LogP<{constraints.get('logp_max', 5)}"
+
+        prompt = (
+            f"你是一位药物化学专家。基于以下靶点信息，设计 3 个候选药物分子。\n\n"
+            f"靶点信息:\n{target_info}{constraint_info}\n\n"
+            f"请返回 JSON 格式：{{\"molecules\": [{{\"smiles\": \"...\", \"rationale\": \"设计理由\"}}]}}\n"
+            f"要求：\n1. SMILES 必须是有效的化学结构\n"
+            f"2. 设计理由不超过 100 字\n"
+            f"3. 分子应符合 Lipinski 五规则"
+        )
+
+        try:
+            response = await llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=getattr(llm_client, "model", "agnes-2.0-flash"),
+            )
+            import json as _json
+
+            content = response if isinstance(response, str) else response.get("content", "")
+            # 尝试解析 JSON
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                parsed = _json.loads(content[start:end])
+                molecules = []
+                for mol in parsed.get("molecules", []):
+                    smiles = mol.get("smiles", "")
+                    if smiles:
+                        # 验证 SMILES 类药性
+                        props = assess_druglikeness(smiles)
+                        molecules.append({
+                            "smiles": smiles,
+                            "design_rationale": mol.get("rationale", ""),
+                            "source": "llm",
+                            "properties": props,
+                        })
+                return {"molecules": molecules, "status": "success", "count": len(molecules)}
+            return {"molecules": [], "status": "parse_error"}
+        except Exception as e:
+            logger.warning(f"LLM 辅助分子设计失败: {e}")
+            return {"molecules": [], "status": "error", "error": str(e)}
+
+    @staticmethod
+    def _generate_structure_image(smiles: str) -> Optional[str]:
+        """生成分子结构图（base64 PNG）— 使用 RDKit
+
+        Args:
+            smiles: 分子 SMILES
+        Returns:
+            base64 编码的 PNG 图片字符串，rdkit 不可用时返回 None
+        """
+        if not smiles:
+            return None
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import Draw
+            import base64 as _b64
+            import io as _io
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                return None
+            img = Draw.MolToImage(mol, size=(300, 300))
+            buf = _io.BytesIO()
+            img.save(buf, format="PNG")
+            return "data:image/png;base64," + _b64.b64encode(buf.getvalue()).decode("utf-8")
+        except ImportError:
+            return None
+        except Exception as e:
+            logger.debug(f"分子结构图生成失败: {e}")
+            return None
+
+    @staticmethod
+    def _deepchem_available() -> bool:
+        """检查 DeepChem 是否可用"""
+        try:
+            import deepchem  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
     async def _design_with_deepchem(
         self,
         seed_smiles: str,

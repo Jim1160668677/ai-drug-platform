@@ -34,12 +34,15 @@ def _reset_llm_singletons():
     """每个测试前后重置 LLM 模块单例 + Jaccard 内存库，避免状态污染"""
     import app.services.llm.guardrail as gr_mod
     import app.services.llm.cost_tracker as ct_mod
+    import app.services.llm.cache as cache_mod
     gr_mod._guardrail = None
     ct_mod._cost_tracker = None
+    cache_mod._cache = None
     _jaccard_store.clear()
     yield
     gr_mod._guardrail = None
     ct_mod._cost_tracker = None
+    cache_mod._cache = None
     _jaccard_store.clear()
 
 
@@ -657,13 +660,14 @@ class TestRouterComplete:
         )
         result = await router.complete("什么是 EGFR", tier=AnalysisTier.FAST_SCREEN)
 
+        from app.core.config import settings
         assert result["content"] == "EGFR 是靶点"
-        assert result["model"] == "gpt-4o-mini"
+        assert result["model"] == settings.LLM_MODEL_FAST
         assert result["cost_usd"] == 0.001
         assert result["references"] == [{"title": "ref"}]
         assert result["guardrail"]["passed"] is True
         assert "duration_sec" in result
-        mock_cost.record.assert_called_once_with("gpt-4o-mini", 100, 50)
+        mock_cost.record.assert_called_once_with(settings.LLM_MODEL_FAST, 100, 50)
 
     @pytest.mark.asyncio
     async def test_success_deep_tier(self):
@@ -673,7 +677,8 @@ class TestRouterComplete:
         )
         result = await router.complete("复杂问题", tier=AnalysisTier.DEEP_INSIGHT)
 
-        assert result["model"] == "gpt-4o"
+        from app.core.config import settings
+        assert result["model"] == settings.LLM_MODEL_DEEP
         assert result["content"] == "深度分析"
 
     @pytest.mark.asyncio
@@ -685,7 +690,8 @@ class TestRouterComplete:
         result = await router.complete("问题", tier=AnalysisTier.FAST_SCREEN)
 
         assert result["content"] == "answer"
-        mock_cost.record.assert_called_once_with("gpt-4o-mini", 0, 0)
+        from app.core.config import settings
+        mock_cost.record.assert_called_once_with(settings.LLM_MODEL_FAST, 0, 0)
 
     @pytest.mark.asyncio
     async def test_none_usage_in_response(self):
@@ -697,7 +703,8 @@ class TestRouterComplete:
 
         assert result["content"] == "answer"
         assert result["usage"] == {}
-        mock_cost.record.assert_called_once_with("gpt-4o-mini", 0, 0)
+        from app.core.config import settings
+        mock_cost.record.assert_called_once_with(settings.LLM_MODEL_FAST, 0, 0)
 
     @pytest.mark.asyncio
     async def test_model_passed_to_llm(self):

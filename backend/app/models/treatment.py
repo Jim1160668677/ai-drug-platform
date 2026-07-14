@@ -2,7 +2,7 @@
 from typing import List, Optional
 from uuid import UUID as UUIDType
 
-from sqlalchemy import Float, ForeignKey, JSON, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -48,3 +48,22 @@ class Treatment(Base, UUIDMixin, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Treatment {self.name} ({self.therapy_type})>"
+
+
+class ClinicalFeedback(Base, UUIDMixin, TimestampMixin):
+    """临床反馈数据 — 患者用药结果"""
+    __tablename__ = "clinical_feedbacks"
+
+    treatment_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    patient_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    age: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    gender: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    dosage: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    duration_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    efficacy: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    adverse_reactions: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    biomarker_changes: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ClinicalFeedback {self.patient_code} ({self.efficacy})>"

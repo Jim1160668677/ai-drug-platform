@@ -2,7 +2,7 @@
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -204,27 +204,105 @@ async def get_treatment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """获取治疗方案详情"""
+    """获取治疗方案详情（含关联靶点、分子、监测数据、配置等完整报告）"""
+    from app.models.target import Target
+    from app.models.molecule import Molecule
     t = await db.get(Treatment, treatment_id)
     if not t:
         raise NotFoundError("治疗方案不存在")
     project = await db.get(Project, t.project_id)
     if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
         raise ForbiddenError("无权访问此资源")
+
+    # 查询关联靶点详情
+    target_ids = t.target_ids or []
+    targets_info = []
+    if target_ids:
+        tgt_result = await db.execute(select(Target).where(Target.id.in_([UUID(tid) for tid in target_ids])))
+        for tgt in tgt_result.scalars().all():
+            targets_info.append({
+                "id": str(tgt.id),
+                "gene_symbol": tgt.gene_symbol,
+                "gene_name": tgt.gene_name,
+                "evidence_grade": tgt.evidence_grade,
+                "confidence_score": tgt.confidence_score,
+                "approved_drugs": tgt.approved_drugs,
+            })
+
+    # 查询关联分子详情
+    molecule_ids = t.molecule_ids or []
+    molecules_info = []
+    if molecule_ids:
+        mol_result = await db.execute(select(Molecule).where(Molecule.id.in_([UUID(mid) for mid in molecule_ids])))
+        for mol in mol_result.scalars().all():
+            molecules_info.append({
+                "id": str(mol.id),
+                "name": mol.name,
+                "smiles": mol.smiles,
+                "molecular_weight": mol.molecular_weight,
+                "logp": mol.logp,
+                "is_approved": mol.is_approved,
+                "source": mol.source,
+            })
+
+    # 治疗类型中文映射
+    therapy_type_map = {
+        "targeted": "靶向治疗",
+        "immuno": "免疫治疗",
+        "chemo": "化疗",
+        "radio": "放疗",
+        "combination": "组合疗法",
+        "vaccine": "mRNA 肿瘤疫苗",
+        "experimental": "探索性治疗",
+    }
+    status_map = {
+        "proposed": "已提出",
+        "testing": "测试中",
+        "effective": "有效",
+        "ineffective": "无效",
+        "deprecated": "已废弃",
+    }
+
     return success_response({
         "id": str(t.id),
         "project_id": str(t.project_id),
         "name": t.name,
         "therapy_type": t.therapy_type,
+        "therapy_type_label": therapy_type_map.get(t.therapy_type, t.therapy_type),
         "target_ids": t.target_ids,
         "molecule_ids": t.molecule_ids,
+        "targets": targets_info,
+        "molecules": molecules_info,
         "hypothesis_id": str(t.hypothesis_id) if t.hypothesis_id else None,
         "status": t.status,
+        "status_label": status_map.get(t.status, t.status),
         "efficacy_score": t.efficacy_score,
         "risk_score": t.risk_score,
+        "confidence": t.confidence,
         "config": t.config,
+        "monitoring_data": t.monitoring_data,
+        "notes": t.notes,
         "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     })
+
+
+@router.delete("/{treatment_id}", response_model=ApiResponse[Dict[str, Any]], summary="删除治疗方案")
+async def delete_treatment(
+    treatment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除治疗方案（仅 FOUNDER 或所属项目拥有者可删除）"""
+    t = await db.get(Treatment, treatment_id)
+    if not t:
+        raise NotFoundError("治疗方案不存在")
+    project = await db.get(Project, t.project_id)
+    if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
+        raise ForbiddenError("无权删除此资源")
+    await db.delete(t)
+    await db.commit()
+    return success_response({"id": str(treatment_id), "deleted": True})
 
 
 @router.post("/{treatment_id}/monitor", response_model=StandardResponse, summary="疗效监测（P3）")
@@ -238,3 +316,98 @@ async def monitor_efficacy(
     monitor = EfficacyMonitor(db)
     result = await monitor.check(treatment_id)
     return success_response(result)
+
+
+class DDICheckRequest(BaseModel):
+    """药物相互作用检查请求"""
+    drug_list: List[str]
+    target_list: Optional[List[str]] = None
+
+
+@router.post("/{treatment_id}/ddi-check", response_model=StandardResponse, summary="药物相互作用检查")
+async def check_ddi(
+    treatment_id: UUID,
+    payload: DDICheckRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """检查治疗方案中的药物相互作用（DDI）
+
+    基于 v3.0 文档第 7 章五大关键深化能力。
+    使用规则表 + 靶点重合度算法，返回风险等级和相互作用详情。
+    """
+    from app.services.analyzer.ddi_checker import get_ddi_checker
+    checker = get_ddi_checker()
+    result = checker.check(payload.drug_list, payload.target_list)
+    return success_response(result)
+
+
+@router.post("/ddi-check", response_model=StandardResponse, summary="药物相互作用检查（无需治疗方案 ID）")
+async def check_ddi_standalone(
+    payload: DDICheckRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """药物相互作用检查（独立端点，无需关联治疗方案）
+
+    用法：POST /treatments/ddi-check
+    Body: {"drug_list": ["warfarin", "aspirin"], "target_list": ["VKORC1"]}
+    """
+    from app.services.analyzer.ddi_checker import get_ddi_checker
+    checker = get_ddi_checker()
+    result = checker.check(payload.drug_list, payload.target_list)
+    return success_response(result)
+
+
+@router.post("/{treatment_id}/clinical-feedback", response_model=ApiResponse[Dict[str, Any]], summary="录入临床反馈")
+async def create_clinical_feedback(
+    treatment_id: UUID,
+    feedback_data: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """录入患者用药结果反馈 — 用药方案/治疗效果/不良反应"""
+    from app.models.treatment import ClinicalFeedback
+    from app.services.experiment.feedback_loop import FeedbackLoop
+
+    fb = ClinicalFeedback(
+        treatment_id=str(treatment_id),
+        patient_code=feedback_data.get("patient_code"),
+        age=feedback_data.get("age"),
+        gender=feedback_data.get("gender"),
+        dosage=feedback_data.get("dosage"),
+        duration_days=feedback_data.get("duration_days"),
+        efficacy=feedback_data.get("efficacy"),
+        adverse_reactions=feedback_data.get("adverse_reactions"),
+        biomarker_changes=feedback_data.get("biomarker_changes"),
+        notes=feedback_data.get("notes"),
+    )
+    db.add(fb)
+
+    loop = FeedbackLoop(db)
+    loop_result = await loop.apply_clinical_feedback(feedback_data, str(treatment_id))
+
+    await db.commit()
+    return success_response({
+        "id": str(fb.id),
+        "treatment_id": str(treatment_id),
+        "loop_analysis": loop_result,
+    })
+
+
+@router.get("/{treatment_id}/clinical-feedbacks", response_model=ApiResponse[List[Dict[str, Any]]], summary="临床反馈列表")
+async def list_clinical_feedbacks(
+    treatment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取治疗方案的所有临床反馈"""
+    from app.models.treatment import ClinicalFeedback
+    stmt = select(ClinicalFeedback).where(ClinicalFeedback.treatment_id == str(treatment_id))
+    result = await db.execute(stmt)
+    items = [{
+        "id": str(f.id), "patient_code": f.patient_code, "age": f.age,
+        "gender": f.gender, "efficacy": f.efficacy,
+        "adverse_reactions": f.adverse_reactions,
+        "created_at": f.created_at.isoformat() if f.created_at else None,
+    } for f in result.scalars().all()]
+    return success_response(items)

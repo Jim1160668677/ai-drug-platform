@@ -63,6 +63,7 @@ class Settings(BaseSettings):
 
     # ========== 大模型 ==========
     OPENAI_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://apihub.agnes-ai.com/v1"
     LLM_MODEL_FAST: str = "gpt-4o-mini"
     LLM_MODEL_DEEP: str = "gpt-4o"
     FAST_SCREEN_MAX_COST_USD: float = 5.0
@@ -87,9 +88,13 @@ class Settings(BaseSettings):
 
     # ========== LLM 预算与护栏 ==========
     LLM_DAILY_BUDGET_USD: float = 50.0
+    LLM_USER_DAILY_BUDGET_USD: float = 10.0  # 单用户日预算
     GUARDRAIL_ENABLED: bool = True
     GUARDRAIL_MAX_DOSE_MG: float = 1000.0  # 剂量上限（mg）
     GUARDRAIL_BLOCK_PATTERNS: str = "绝对治愈,100%有效,包治百病,特效药"
+    # 医学红线规则（v3.0 文档 11.3 节）
+    GUARDRAIL_MEDICAL_REDLINES_ENABLED: bool = True
+    CONSENT_CHECK_ENABLED: bool = True  # 知情同意校验（功能 7）
 
     # ========== 限流 ==========
     # 登录端点限流（防暴力破解，始终启用）

@@ -50,7 +50,9 @@ api.interceptors.response.use(
         localStorage.removeItem('ai_drug_token');
         localStorage.removeItem('ai_drug_user');
         if (window.location.pathname !== '/') {
-          window.location.href = '/';
+          // SPA 导航：避免全页面刷新丢失 React Query 缓存
+          window.history.replaceState(null, '', '/');
+          window.dispatchEvent(new PopStateEvent('popstate'));
         }
       } else if (status >= 500) {
         console.error('[API Error]', status, data);

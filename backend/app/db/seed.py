@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, UserRole
 from app.core.config import settings
+from app.core.encryption import encrypt
 from app.db.session import AsyncSessionLocal, init_db
 from app.models.user import User
 from app.models.project import Project, ProjectStatus
@@ -24,9 +25,47 @@ from app.models.target import Target, EvidenceGrade
 from app.models.hypothesis import Hypothesis, HypothesisStatus
 from app.models.experiment import Experiment, ExperimentStatus, ExperimentType
 from app.models.treatment import Treatment, TreatmentStatus, TreatmentType
+from app.models.llm_config import LLMConfig, AccessMode, UpstreamProtocol
 
 
 DEMO_PASSWORD = "demo123456"
+
+AGNES_API_KEY = "sk-EGw4PNgeLncSdPDy09XZJK9DQHa4uUcQ15EEv8bousgPxo39"
+AGNES_BASE_URL = "https://apihub.agnes-ai.com/v1"
+AGNES_MODEL = "agnes-2.0-flash"
+
+
+async def seed_llm_config(db: AsyncSession) -> int:
+    """灌入 Agnes LLM 配置"""
+    existing = await db.execute(select(LLMConfig).where(LLMConfig.name == "Agnes"))
+    if existing.scalar_one_or_none():
+        return 0
+
+    # 先清除其他 active 配置
+    other_active = await db.execute(select(LLMConfig).where(LLMConfig.is_active == True))  # noqa: E712
+    for cfg in other_active.scalars().all():
+        cfg.is_active = False
+
+    config = LLMConfig(
+        name="Agnes",
+        provider="agnes",
+        access_mode=AccessMode.API_ONLY,
+        upstream_protocol=UpstreamProtocol.CHAT_COMPLETIONS,
+        base_url=AGNES_BASE_URL,
+        api_key=encrypt(AGNES_API_KEY),
+        test_model=AGNES_MODEL,
+        fast_model=AGNES_MODEL,
+        deep_model=AGNES_MODEL,
+        version="1.0.0",
+        temperature=0.7,
+        max_tokens=2000,
+        timeout_sec=60,
+        is_active=True,
+        description="Agnes AI 大模型 API（API Only / Chat Completions）",
+    )
+    db.add(config)
+    await db.flush()
+    return 1
 
 DEMO_USERS = [
     {
@@ -69,7 +108,7 @@ DEMO_USERS = [
 
 async def seed_database(db: AsyncSession) -> dict:
     """灌入种子数据"""
-    stats = {"users": 0, "projects": 0, "datasets": 0, "targets": 0, "hypotheses": 0, "experiments": 0}
+    stats = {"users": 0, "projects": 0, "datasets": 0, "targets": 0, "hypotheses": 0, "experiments": 0, "llm_configs": 0}
 
     # 1. 创建用户
     users = {}
@@ -276,6 +315,9 @@ async def seed_database(db: AsyncSession) -> dict:
         db.add(exp)
         await db.flush()
         stats["experiments"] += 1
+
+    # 7. 灌入 Agnes LLM 配置
+    stats["llm_configs"] += await seed_llm_config(db)
 
     await db.commit()
     return stats

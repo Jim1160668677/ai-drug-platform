@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI精准药物设计系统 - 功能演示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; scroll-behavior: smooth; background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%); color: #e0e0e0; }
+        .gradient-text { background: linear-gradient(90deg, #00d9ff, #7b2ff7, #ff00ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .glow { box-shadow: 0 0 20px rgba(0, 217, 255, 0.3), 0 0 40px rgba(123, 47, 247, 0.2); }
+        .card-hover { transition: all 0.4s ease; }
+        .card-hover:hover { transform: translateY(-8px); box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5), 0 0 30px rgba(0,217,255,0.2); }
+        .feature-card { background: rgba(255,255,255,0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; }
+        @keyframes float { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-10px);} }
+        @keyframes pulse-slow { 0%,100%{opacity:0.6;} 50%{opacity:1;} }
+        .animate-float { animation: float 4s ease-in-out infinite; }
+        .animate-pulse-slow { animation: pulse-slow 3s ease-in-out infinite; }
+        .timeline-line { position: absolute; left: 24px; top: 0; bottom: 0; width: 2px; background: linear-gradient(180deg, #00d9ff, #7b2ff7); }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+    <nav class="fixed top-0 left-0 right-0 z-50 bg-black/40 backdrop-blur-xl border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                </div>
+                <span class="text-xl font-bold gradient-text">AI精准药物设计系统</span>
+            </div>
+            <div class="hidden md:flex items-center space-x-6">
+                <a href="#overview" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">系统概览</a>
+                <a href="#data" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">数据管理</a>
+                <a href="#targets" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">靶点发现</a>
+                <a href="#molecules" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">分子设计</a>
+                <a href="#hypotheses" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">多假设管理</a>
+                <a href="#experiments" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">干湿闭环</a>
+                <a href="#chat" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">AI问答</a>
+                <a href="#federated" class="text-gray-300 hover:text-white text-sm font-medium transition-colors">联邦学习</a>
+            </div>
+        </div>
+    </nav>
+
+    <section id="overview" class="min-h-screen flex items-center justify-center pt-20">
+        <div class="absolute inset-0 overflow-hidden">
+            <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse-slow"></div>
+            <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse-slow" style="animation-delay:1.5s;"></div>
+        </div>
+        <div class="relative z-10 max-w-6xl mx-auto px-6 text-center">
+            <div class="inline-flex items-center space-x-2 bg-white/5 border border-white/10 rounded-full px-4 py-2 mb-8">
+                <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                <span class="text-sm text-gray-400">AI驱动 · 精准医疗 · 药物研发</span>
+            </div>
+            <h1 class="text-5xl md:text-7xl font-bold mb-6">
+                <span class="text-white">AI模式</span><br>
+                <span class="gradient-text">精准药物设计系统</span>
+            </h1>
+            <p class="text-lg text-gray-400 max-w-3xl mx-auto mb-12">
+                整合多组学数据分析、AI靶点发现、分子设计与评估的新一代智能药物研发平台，实现从湿实验到干实验的完整闭环。
+            </p>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-16">
+                <div class="feature-card p-6 text-center card-hover">
+                    <div class="text-3xl font-bold gradient-text mb-2">12+</div>
+                    <div class="text-sm text-gray-400">数据类型支持</div>
+                </div>
+                <div class="feature-card p-6 text-center card-hover">
+                    <div class="text-3xl font-bold gradient-text mb-2">100+</div>
+                    <div class="text-sm text-gray-400">靶点识别能力</div>
+                </div>
+                <div class="feature-card p-6 text-center card-hover">
+                    <div class="text-3xl font-bold gradient-text mb-2">500+</div>
+                    <div class="text-sm text-gray-400">分子设计库</div>
+                </div>
+                <div class="feature-card p-6 text-center card-hover">
+                    <div class="text-3xl font-bold gradient-text mb-2">99%</div>
+                    <div class="text-sm text-gray-400">类药性评估准确率</div>
+                </div>
+            </div>
+            <div class="flex justify-center animate-bounce">
+                <svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                </svg>
+            </div>
+        </div>
+    </section>
+
+    <section id="data" class="py-24">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold mb-4"><span class="text-white">多组学数据管理</span><span class="gradient-text">平台</span></h2>
+                <p class="text-gray-400 max-w-2xl mx-auto">支持12种数据类型的上传、解析和分析，提供完整的数据质量评估和可视化报告</p>
+            </div>
+            <div class="grid lg:grid-cols-2 gap-12 items-center">
+                <div class="space-y-6">
+                    <div class="feature-card p-6 card-hover">
+                        <div class="flex items-start space-x-4">
+                            <div class="w-12 h-12 rounded-lg bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
+                                <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                </svg>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-semibold text-white mb-2">数据上传与解析</h3>
+                                <p class="text-gray-400 text-sm">支持RNA-seq、scRNA-seq、WES、WGS、VCF、FASTA等12种组学数据格式的自动识别和解析</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="feature-card p-6 card-hover">
+                        <div class="flex items-start space-x-4">
+                            <div class="w-12 h-12 rounded-lg bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                                <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                </svg>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-semibold text-white mb-2">质量评估报告</h3>
+                                <p class="text-gray-400 text-sm">自动生成数据质量报告，包括测序深度、GC含量、重复率等关键指标</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="feature-card p-6 card-hover">
+                        <div class="flex items-start space-x-4">
+                            <div class="w-12 h-12 rounded-lg bg-pink-500/20 flex items-center justify-center flex-shrink-0">
+                                <svg class="w-6 h-6 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                </svg>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-semibold text-white mb-2">生信分析流程</h3>
+                                <p class="text-gray-400 text-sm">差异表达分析、聚类分析、功能富集分析等自动化生信分析流程</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="feature-card p-8">
+                    <h3 class="text-xl font-semibold text-white mb-6">数据类型支持矩阵</h3>
+                    <div class="grid grid-cols-3 gap-4 mb-6">
+                        <div class="p-4 bg-cyan-500/10 rounded-lg border border-cyan-500/20">
+                            <div class="text-cyan-400 font-semibold mb-1">RNA-seq</div>
+                            <div class="text-xs text-gray-500">转录组测序</div>
+                        </div>
+                        <div class="p-4 bg-purple-500/10 rounded-lg border border-purple-500/20">
+                            <div class="text-purple-400 font-semibold mb-1">scRNA-seq</div>
+                            <div class="text-xs text-gray-500">单细胞转录组</div>
+                        </div>
+                        <div class="p-4 bg-pink-500/10 rounded-lg border border-pink-500/20">
+                            <div class="text-pink-400 font-semibold mb-1">WES</div>
+                            <div class="text-xs text-gray-500">全外显子测序</div>
+                        </div>
+                        <div class="p-4 bg-green-500/10 rounded-lg border border-green-500/20">
+                            <div class="text-green-400 font-semibold mb-1">WGS</div>
+                            <div class="text-xs text-gray-500">全基因组测序</div>
+                        </div>
+                        <div class="p-4 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
+                            <div class="text-yellow-400 font-semibold mb-1">VCF</div>
+                            <div class="text-xs text-gray-500">变异文件</div>
+                        </div>
+                        <div class="p-4 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                            <div class="text-orange-400 font-semibold mb-1">FASTA</div>
+                            <div class="text-xs text-gray-500">序列格式</div>
+                        </div>
+                    </div>
+                    <div class="h-48">
+                        <canvas id="dataTypeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="targets" class="py-24">
+        <div class="absolute inset-0 bg-gradient-to-b from-transparent via-purple-500/5 to-transparent"></div>
+        <div class="max-w-7xl mx-auto px-6 relative z-10">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold mb-4"><span class="text-white">AI靶点发现</span><span class="gradient-text">引擎</span></h2>
+                <p class="text-gray-400 max-w-2xl mx-auto">基于多组学数据自动识别候选靶点，构建完整证据链，支持老药新用扫描</p>
+            </div>
+            <div class="grid lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-2">
+                    <div class="feature-card p-8">
+                        <h3 class="text-xl font-semibold text-white mb-6">靶点识别流程</h3>
+                        <div class="relative pl-12">
+                            <div class="timeline-line"></div>
+                            <div class="relative mb-8">
+                                <div class="absolute left-0 top-0 w-12 h-12 transform -translate-x-1/2 bg-cyan-500 rounded-full flex items-center justify-center">
+                                    <span class="text-white font-bold text-sm">1</span>
+                                </div>
+                                <h4 class="text-lg font-semibold text-white">多组学数据整合</h4>
+                                <p class="text-gray-400 text-sm mt-2">整合RNA-seq、scRNA-seq、WES等多维度数据</p>
+                            </div>
+                            <div class="relative mb-8">
+                                <div class="absolute left-0 top-0 w-12 h-12 transform -translate-x-1/2 bg-purple-500 rounded-full flex items-center justify-center">
+                                    <span class="text-white font-bold text-sm">2</span>
+                                </div>
+                                <h4 class="text-lg font-semibold text-white">差异表达分析</h4>
+                                <p class="text-gray-400 text-sm mt-2">识别疾病相关的差异表达基因</p>
+                            </div>
+                            <div class="relative mb-8">
+                                <div class="absolute left-0 top-0 w-12 h-12 transform -translate-x-1/2 bg-pink-500 rounded-full flex items-center justify-center">
+                                    <span class="text-white font-bold text-sm">3</span>
+                                </div>
+                                <h4 class="text-lg font-semibold text-white">功能富集分析</h4>
+                                <p class="text-gray-400 text-sm mt-2">GO/KEGG通路富集，筛选关键生物过程</p>
+                            </div>
+                            <div class="relative">
+                                <div class="absolute left-0 top-0 w-12 h-12 transform -translate-x-1/2 bg-green-500 rounded-full flex items-center justify-center">
+                                    <span class="text-white font-bold text-sm">4</span>
+                                </div>
+                                <h4 class="text-lg font-semibold text-white">靶点优先级排序</h4>
+                                <p class="text-gray-400 text-sm mt-2">基于证据等级(I-IV级)进行优先级排序</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="space-y-6">
+                    <div class="feature-card p-6 card-hover">
+                        <h3 class="text-lg font-semibold text-white mb-4">证据等级分布</h3>
+                        <div class="h-48">
+                            <canvas id="evidenceChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="feature-card p-6 card-hover">
+                        <h3 class="text-lg font-semibold text-white mb-4">老药新用扫描</h3>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-400 text-sm">药物重定位</span>
+                                <span class="text-cyan-400">+120种</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-400 text-sm">适应症拓展</span>
+                                <span class="text-purple-400">+85种</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-400 text-sm">靶点匹配</span>
+                                <span class="text-pink-400">95%准确率</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="feature-card p-6 card-hover">
+                        <h3 class="text-lg font-semibold text-white mb-4">证据链构建</h3>
+                        <div class="space-y-2">
+                            <div class="flex items-center space-x-2">
+                                <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                                <span class="text-sm text-gray-300">I级证据 - 临床验证</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-3 h-3 rounded-full bg-cyan-500"></div>
+                                <span class="text-sm text-gray-300">II级证据 - 实验验证</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-3 h-3 rounded-full bg-purple-500"></div>
+                                <span class="text-sm text-gray-300">III级证据 - 计算预测</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                                <span class="text-sm text-gray-300">IV级证据 - 文献支持</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="molecules" class="py-24">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold mb-4"><span class="text-white">分子设计与</span><span class="gradient-text">类药性评估</span></h2>
+                <p class="text-gray-400 max-w-2xl mx-auto">使用RDKit进行类药性评估、ADMET预测和分子结构解析，支持多靶点协同设计</p>
+            </div>
+            <div class="grid lg:grid-cols-3 gap-8">
+                <div class="feature-card p-8">
+                    <h3 class="text-xl font-semibold text-white mb-6">类药性评估</h3>
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between p-4 bg-white/5 rounded-lg">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center">
+                                    <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012

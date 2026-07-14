@@ -34,8 +34,8 @@ def setup_logging() -> None:
             compression="zip",
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WARNING] 日志目录创建失败，仅使用控制台输出: {e}", file=sys.stderr)
 
     # 拦截标准库 logging
     class InterceptHandler(logging.Handler):
