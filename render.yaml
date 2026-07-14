@@ -1,0 +1,40 @@
+# Render Blueprint — 一键部署 AI 精准药物设计系统后端
+# 使用方法：
+#   1. 推送本文件到 GitHub 仓库根目录
+#   2. 登录 https://dashboard.render.com → New → Blueprint
+#   3. 选择本仓库，Render 会自动识别 render.yaml 并创建服务
+#   4. 部署完成后，从 Render 控制台获取后端公网 URL
+#
+# 注意：免费层 (free) 512MB RAM，15 分钟无流量自动休眠，冷启动 30~60 秒。
+# 当前为 mock 模式部署（USE_MOCK=true），无需任何外部数据库即可运行。
+
+services:
+  - type: web
+    name: ai-drug-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeploy: true
+    # Render 会将 Dockerfile 中 EXPOSE 的端口作为外部访问端口
+    # 后端 EXPOSE 8000，CMD uvicorn --port 8000
+    envVars:
+      - key: APP_ENV
+        value: development
+      - key: USE_MOCK
+        value: "true"
+      - key: BACKEND_HOST
+        value: 0.0.0.0
+      - key: BACKEND_PORT
+        value: "8000"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ORIGINS
+        # 临时允许所有源访问（mock 模式仅用于体验）
+        # 前端域名确定后请替换为：https://<your-iga-pages-domain>
+        value: "*"
+      - key: GUARDRAIL_ENABLED
+        value: "true"
+      - key: ENVELOPE_MIDDLEWARE_ENABLED
+        value: "true"
