@@ -1,3 +1,18 @@
+---
+title: AI 精准药物设计系统
+emoji: 💊
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+short_description: 干湿闭环、多假设并行、老药新用的 AI 精准药物设计平台
+---
+
+<!-- 注意：以上 YAML front matter 仅供 Hugging Face Spaces 识别 Space 元数据。
+     GitHub 上展示本 README 时可忽略此 YAML 块。 -->
+
 # AI模式精准药物设计系统
 
 > AI Mode Driven Precision Drug Design System  
