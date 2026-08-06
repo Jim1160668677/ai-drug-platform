@@ -233,8 +233,8 @@ def test_deduplicate_by_doi(client):
     assert len(kept) == 1 and kept[0].relevance_score == 0.9
 
 
-def test_sort_by_relevance(client):
-    """测试相关性排序 — score 降序(None 在后)"""
+def test_sort_by_relevance_mixed_scores(client):
+    """测试相关性排序 — 混合 score(None + float),None 排最后"""
     papers = [
         _make_paper("A", "biorxiv", "10.0001/a", 2024, None),
         _make_paper("B", "arxiv", "10.0001/b", 2024, 0.9),
