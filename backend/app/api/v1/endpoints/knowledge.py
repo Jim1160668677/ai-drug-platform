@@ -1,8 +1,10 @@
 """知识库端点 — 基因/变异/药物查询"""
-from typing import List, Optional
+import time
+from typing import Dict, List, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_gene_client, get_variant_client, get_chembl_client
@@ -82,3 +84,127 @@ async def match_clinical_trials(
     from app.services.knowledge.gene_query import query_clinical_trials
     result = await query_clinical_trials(gene_symbol, cancer_type)
     return success_response(result)
+
+
+# ========== Phase B7: Co-Scientist 知识库集成 ==========
+
+
+class CoscientistSearchQuery(BaseModel):
+    """Co-Scientist 知识库搜索查询"""
+    query: str  # 自然语言查询
+    top_k: int = 5  # 返回前 K 个结果（1-50）
+    scope: str = "all"  # all / hypotheses / runs
+
+
+@router.post("/coscientist/search", response_model=StandardResponse, summary="搜索 Co-Scientist 知识库")
+async def search_coscientist_knowledge(
+    payload: CoscientistSearchQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """搜索已索引的 Co-Scientist 假设和运行
+
+    支持按自然语言查询相似的研究假设和历史运行记录。
+    搜索范围：hypotheses（仅假设）/ runs（仅运行）/ all（两者）
+    """
+    from app.services.knowledge.coscientist_indexer import CoScientistIndexer
+
+    try:
+        indexer = CoScientistIndexer(db)
+        top_k = min(max(payload.top_k, 1), 50)
+
+        if payload.scope == "hypotheses":
+            results = await indexer.search_hypotheses(payload.query, top_k=top_k)
+            data = {"hypotheses": results, "runs": [], "total": len(results)}
+        elif payload.scope == "runs":
+            results = await indexer.search_runs(payload.query, top_k=top_k)
+            data = {"hypotheses": [], "runs": results, "total": len(results)}
+        else:
+            data = await indexer.search_all(payload.query, top_k=top_k)
+            data["total"] = len(data["hypotheses"]) + len(data["runs"])
+
+        return success_response(data)
+    except Exception as e:
+        return StandardResponse(
+            success=False,
+            message=f"知识库搜索失败: {str(e)}",
+            data={"error": str(e)},
+        )
+
+
+@router.post("/coscientist/index/{run_id}", response_model=StandardResponse, summary="索引 Co-Scientist 运行")
+async def index_coscientist_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """手动索引 Co-Scientist 运行结果到知识库
+
+    将运行的假设和运行摘要索引到向量存储，支持后续相似度检索。
+    索引操作幂等，重复索引同一运行不会产生重复文档。
+    """
+    from app.services.knowledge.coscientist_indexer import CoScientistIndexer
+
+    try:
+        indexer = CoScientistIndexer(db)
+        result = await indexer.index_run(run_id)
+        return success_response(result)
+    except Exception as e:
+        return StandardResponse(
+            success=False,
+            message=f"索引失败: {str(e)}",
+            data={"run_id": str(run_id), "error": str(e)},
+        )
+
+
+@router.get("/coscientist/stats", response_model=StandardResponse, summary="Co-Scientist 知识库统计")
+async def coscientist_knowledge_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取 Co-Scientist 知识库索引统计
+
+    返回集合信息、向量存储可用性等。
+    """
+    from app.services.knowledge.coscientist_indexer import CoScientistIndexer
+
+    indexer = CoScientistIndexer(db)
+    stats = await indexer.get_stats()
+    return success_response(stats)
+
+
+class AcademicSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+    sources: List[str] = Field(default=["pubmed", "biorxiv", "arxiv", "semantic_scholar", "crossref"])
+    limit_per_source: int = Field(default=10, ge=1, le=50)
+    year_from: Optional[int] = Field(default=None, ge=1900, le=2100)
+    year_to: Optional[int] = Field(default=None, ge=1900, le=2100)
+    deduplicate: bool = True
+
+
+class AcademicSearchResponse(BaseModel):
+    query: str
+    sources_queried: List[str]
+    total_hits: Dict[str, int]
+    papers: List[dict]
+    search_time_ms: int
+
+
+@router.post("/academic-search", response_model=StandardResponse, summary="学术资源聚合检索(5源并行)")
+async def academic_search(payload: AcademicSearchRequest, current_user: User = Depends(get_current_user)):
+    from app.services.analyzer.academic_search_client import AcademicSearchClient
+
+    t0 = time.time()
+    client = AcademicSearchClient()
+    raw = await client.search_all(payload.query, payload.sources, payload.limit_per_source,
+                                 payload.year_from, payload.year_to)
+    papers = [p for plist in raw.values() for p in plist]
+    total_hits = {src: len(plist) for src, plist in raw.items()}
+    if payload.deduplicate:
+        papers = client.deduplicate(papers)
+    papers = AcademicSearchClient.sort_by_relevance(papers)
+    elapsed = int((time.time() - t0) * 1000)
+    return success_response(AcademicSearchResponse(
+        query=payload.query, sources_queried=payload.sources, total_hits=total_hits,
+        papers=[p.model_dump() for p in papers], search_time_ms=elapsed
+    ).model_dump())
