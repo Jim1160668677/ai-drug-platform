@@ -202,3 +202,57 @@ class TestAcademicSearchEndpoint:
         assert data["total_hits"]["arxiv"] == 1
         assert data["total_hits"]["biorxiv"] == 1
         assert len(data["papers"]) == 3
+
+
+@pytest.mark.asyncio
+@patch("app.services.analyzer.academic_search_client.AcademicSearchClient")
+async def test_422_empty_query(mock_client_cls, client):
+    """空 query 应返回 422"""
+    resp = await client.post(
+        "/api/v1/knowledge/academic-search",
+        json={"query": "", "sources": ["biorxiv"]},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("app.services.analyzer.academic_search_client.AcademicSearchClient")
+async def test_422_limit_exceeded(mock_client_cls, client):
+    """limit_per_source 超过上限应返回 422"""
+    resp = await client.post(
+        "/api/v1/knowledge/academic-search",
+        json={"query": "cancer", "sources": ["biorxiv"], "limit_per_source": 100},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("app.services.analyzer.academic_search_client.AcademicSearchClient")
+async def test_partial_source_failure(mock_client_cls, client):
+    """一个源失败不影响其他源 — search_all 内部捕获异常, 失败源返回空列表"""
+    from unittest.mock import AsyncMock, Mock
+
+    mock_instance = mock_client_cls.return_value
+
+    async def fake_search_all(*args, **kw):
+        sources = args[1] if len(args) > 1 else kw.get("sources", [])
+        result = {}
+        for s in sources:
+            if s == "arxiv":
+                result[s] = []  # degraded: arxiv 内部捕获异常返回空
+            else:
+                result[s] = [_make_paper(f"Paper {s}", s)]
+        return result
+
+    mock_instance.search_all = AsyncMock(side_effect=fake_search_all)
+    mock_instance.deduplicate = Mock(side_effect=lambda x: x)
+    mock_client_cls.sort_by_relevance = Mock(side_effect=lambda x: x)
+
+    resp = await client.post(
+        "/api/v1/knowledge/academic-search",
+        json={"query": "cancer", "sources": ["biorxiv", "arxiv"], "deduplicate": False},
+    )
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["total_hits"]["biorxiv"] == 1
+    assert body["total_hits"]["arxiv"] == 0  # degraded
