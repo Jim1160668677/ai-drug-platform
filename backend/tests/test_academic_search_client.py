@@ -186,8 +186,8 @@ async def test_search_timeout_returns_empty(client):
 
 
 @pytest.mark.asyncio
-async def test_search_source_exception_does_not_block_others(client):
-    """测试单个数据源异常不阻塞其他源"""
+async def test_search_source_exception_does_not_block_others_mixed(client):
+    """测试单个数据源异常不阻塞其他源（混合源场景）"""
     good = _make_paper("Good", "biorxiv", "10.1234/good", 2024, 0.8)
 
     mock_biorxiv = MagicMock()
@@ -215,14 +215,14 @@ async def test_search_source_exception_does_not_block_others(client):
 
 
 @pytest.mark.asyncio
-async def test_search_invalid_source_raises(client):
-    """测试无效数据源抛出 ValueError"""
+async def test_search_invalid_source_raises_via_search(client):
+    """测试无效数据源抛出 ValueError（通过 search 方法）"""
     with pytest.raises(ValueError, match="无效数据源"):
         await client.search("invalid_db", "test")
 
 
-def test_deduplicate_by_doi(client):
-    """测试 DOI 去重 — 保留更高 relevance_score"""
+def test_deduplicate_by_doi_via_instance(client):
+    """测试 DOI 去重 — 保留更高 relevance_score（通过实例方法）"""
     p1 = _make_paper("Title A", "biorxiv", "10.1234/same", 2024, 0.6)
     p2 = _make_paper("Title B", "arxiv", "10.1234/same", 2024, 0.9)
     p3 = _make_paper("Title C", "crossref", "10.1234/other", 2023, 0.5)

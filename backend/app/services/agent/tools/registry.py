@@ -3,7 +3,7 @@
 设计来源：2026-07-18-agent-functional-design.md §1.1 / §7
 
 职责：
-- 启动时注册所有 22 个工具（含 Phase B6 新增 3 个 Co-Scientist 工具）
+- 启动时注册所有 24 个工具（含 Phase B6 新增 3 个 Co-Scientist 工具）
 - 按用户角色过滤可用工具（list_for_user）
 - 参数校验（JSON Schema + Pydantic）
 - 工具执行（含权限校验、副作用确认、异常捕获）
@@ -55,7 +55,7 @@ class ToolRegistry:
         logger.debug(f"注册工具: {tool.name}")
 
     def register_all(self) -> None:
-        """注册全部 19 个工具（按工具组导入）"""
+        """注册全部 24 个工具（按工具组导入）"""
         # 延迟导入避免循环依赖
         from app.services.agent.tools.data_analysis import (
             AnalyzeDatasetTool,
