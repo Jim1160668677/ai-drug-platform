@@ -392,3 +392,13 @@ class IntentRouter:
         if suggested_tier in ("deep", "standard"):
             return "turbo", f"预算告警：剩余 ${budget_remaining:.2f}（{budget_ratio:.0%}），已降为快速筛查档"
         return "turbo", None
+
+    def suggest_tier_detail(self, message: str, force_tier: Optional[str] = None) -> Dict[str, Any]:
+        """零成本档位推荐 (仅 keyword 路由，无 LLM 调用)"""
+        intent = self._keyword_route(message)
+        tier = self.suggest_tier(message, intent.mode, intent.confidence, force_tier=force_tier)
+        return {
+            "tier": tier,
+            "reason": intent.reason,
+            "confidence": intent.confidence,
+        }

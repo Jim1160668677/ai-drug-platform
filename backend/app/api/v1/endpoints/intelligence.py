@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.schemas import StandardResponse
 from app.core.deps import get_current_user, get_llm_client_with_fallback
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.unified_session import PrimaryMode, UnifiedSession, UnifiedSessionStatus
 from app.models.user import User
@@ -34,11 +35,13 @@ from app.schemas.intelligence import (
     RuleExecuteRequest, RuleExecuteResponse, RuleExecutionResultItem, RuleListResponse,
     RuleResponse, RuleSetResponse, RuleValidateRequest, RuleValidateResponse,
     SessionArchive, SessionCreate,
-    SessionListResponse, SessionResponse, TraceResponse, TraceStep, TraceTreeResponse,
+    SessionListResponse, SessionResponse, TierSuggestRequest, TierSuggestResponse,
+    TraceResponse, TraceStep, TraceTreeResponse,
     VisionAnalyzeRequest, VisionAnalyzeResponse,
 )
 from app.services.intelligence.analysis_service import AnalysisService
 from app.services.intelligence.evidence_collector import EvidenceCollector
+from app.services.intelligence.intent_router import IntentRouter
 from app.services.intelligence.multimodal_normalizer import MultimodalNormalizer
 from app.services.intelligence.orchestrator import UnifiedOrchestrator
 from app.services.intelligence.rule_engine.engine import RuleEngine
@@ -219,6 +222,28 @@ async def force_mode(
     await db.commit()
     await db.refresh(session)
     return StandardResponse(success=True, message="主模式已切换", data={"primary_mode": session.primary_mode})
+
+
+@router.post("/sessions/{session_id}/suggest-tier", response_model=StandardResponse)
+async def suggest_tier(
+    session_id: UUID,
+    body: TierSuggestRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """推荐档位 (零成本，仅 keyword 路由)"""
+    _get_session_or_404(db, session_id, user)
+    router = IntentRouter(llm_client=None)
+    detail = router.suggest_tier_detail(body.message)
+    tier = detail["tier"]
+    tier_config = settings.LLM_TIERS.get(tier, settings.LLM_TIERS.get(settings.DEFAULT_LLM_TIER, {}))
+    resp = TierSuggestResponse(
+        tier=tier,
+        reason=detail["reason"],
+        confidence=detail["confidence"],
+        tier_config=tier_config,
+    )
+    return StandardResponse(success=True, data=resp.model_dump(mode="json"))
 
 
 # ========== 3. 上下文与追溯（5 端点） ==========
