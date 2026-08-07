@@ -39,6 +39,38 @@ class ExperimentResultUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class ScheduleRequest(BaseModel):
+    dsl: Dict[str, Any]
+    project_id: UUID
+    hypothesis_ids: Optional[List[str]] = None
+
+
+class ScheduleResponse(BaseModel):
+    schedule_id: str
+    steps: List[Dict[str, Any]]
+    conflicts: List[Dict[str, Any]]
+    nextflow_params: Optional[Dict[str, Any]] = None
+    lims_csv: Optional[str] = None
+    audit_log_id: str
+
+
+@router.post("/schedule", response_model=StandardResponse, summary="调度实验")
+async def schedule_experiment(
+    body: ScheduleRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """调度实验: DSL → 可执行步骤 + 冲突检测 + 审计"""
+    from app.services.experiment.dsl import ExperimentDSL
+    from app.services.experiment.scheduler import ExperimentScheduler
+
+    dsl = ExperimentDSL.from_dict(body.dsl)
+    scheduler = ExperimentScheduler()
+    result = scheduler.schedule(dsl, body.project_id, body.hypothesis_ids)
+
+    return StandardResponse(success=True, data=result)
+
+
 @router.get("", response_model=PagedResponse[Dict[str, Any]], summary="实验列表")
 async def list_experiments(
     project_id: UUID = Query(None),
