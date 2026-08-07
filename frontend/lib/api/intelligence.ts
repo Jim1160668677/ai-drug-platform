@@ -524,3 +524,32 @@ export const executeRules = (payload: RuleExecutePayload): Promise<RuleExecuteRe
 
 export const validateRules = (payload: RuleValidatePayload): Promise<RuleValidateResponse> =>
   api.post('/intelligence/rules/validate', payload).then(unwrap<RuleValidateResponse>);
+
+// ============================================================================
+// 6. 证据重检索(Reexecute)
+// ============================================================================
+
+export interface ReexecutePayload {
+  session_id: string;
+  original_step_id?: string;
+  query?: string;
+  sources?: string[];
+  add_sources?: string[];
+  limit_per_source?: number;
+  year_from?: number;
+  year_to?: number;
+  deduplicate?: boolean;
+}
+
+export interface ReexecuteResponse {
+  step_id: string;
+  parent_step_id: string | null;
+  query: string;
+  sources_queried: string[];
+  total_hits: Record<string, number>;
+  papers: EvidencePaper[];
+  search_time_ms: number;
+}
+
+export const reexecuteAcademicSearch = (payload: ReexecutePayload): Promise<ReexecuteResponse> =>
+  api.post('/knowledge/academic-search/reexecute', payload).then(unwrap<ReexecuteResponse>);

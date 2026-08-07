@@ -101,7 +101,10 @@ export {
   getRulePreset,
   executeRules,
   validateRules,
+  reexecuteAcademicSearch,
   type StreamCallbacks,
+  type ReexecutePayload,
+  type ReexecuteResponse,
 } from './intelligence';
 
 export type { ApiResponse, PagedResponse, ErrorResponse, StandardResponse } from './types';

@@ -5,6 +5,15 @@ import TraceTimeline from './TraceTimeline';
 
 vi.mock('@/lib/api', () => ({
   getTrace: vi.fn(),
+  reexecuteAcademicSearch: vi.fn().mockResolvedValue({
+    step_id: 'new-step-1',
+    parent_step_id: 't1',
+    query: 'test',
+    sources_queried: ['pubmed'],
+    total_hits: { pubmed: 1 },
+    papers: [],
+    search_time_ms: 100,
+  }),
 }));
 
 import { getTrace } from '@/lib/api';
@@ -179,5 +188,196 @@ describe('TraceTimeline', () => {
     renderWithProviders(<TraceTimeline sessionId="s1" />);
     expect(await screen.findByText('推理追溯')).toBeInTheDocument();
     expect(screen.queryByText(/证据/)).not.toBeInTheDocument();
+  });
+
+  it('展开证据后显示干预按钮', async () => {
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: [
+        {
+          id: 't1',
+          step_type: 'tool_call',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00Z',
+          evidence: {
+            query: 'EGFR cancer',
+            sources: ['pubmed'],
+            total_hits: { pubmed: 3 },
+            papers: [
+              { id: 'p1', title: 'Paper A', source: 'pubmed', year: 2024 },
+            ],
+          },
+        },
+      ],
+    });
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    const toggle = await screen.findByText('tool call');
+    fireEvent.click(toggle);
+
+    expect(await screen.findByText('调整检索词')).toBeInTheDocument();
+    expect(screen.getByText('添加数据源')).toBeInTheDocument();
+  });
+
+  it('点击调整检索词打开编辑 Modal', async () => {
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: [
+        {
+          id: 't1',
+          step_type: 'tool_call',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00Z',
+          evidence: {
+            query: 'EGFR cancer',
+            sources: ['pubmed'],
+            total_hits: { pubmed: 3 },
+            papers: [{ id: 'p1', title: 'Paper A', source: 'pubmed', year: 2024 }],
+          },
+        },
+      ],
+    });
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    const toggle = await screen.findByText('tool call');
+    fireEvent.click(toggle);
+
+    const editBtn = await screen.findByText('调整检索词');
+    fireEvent.click(editBtn);
+
+    const input = screen.getByTestId('edit-query-input');
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveValue('EGFR cancer');
+  });
+
+  it('点击添加数据源打开数据源选择 Modal', async () => {
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: [
+        {
+          id: 't1',
+          step_type: 'tool_call',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00Z',
+          evidence: {
+            query: 'test query',
+            sources: ['pubmed'],
+            total_hits: { pubmed: 2 },
+            papers: [{ id: 'p1', title: 'Paper A', source: 'pubmed', year: 2024 }],
+          },
+        },
+      ],
+    });
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    const toggle = await screen.findByText('tool call');
+    fireEvent.click(toggle);
+
+    const addBtn = await screen.findByText('添加数据源');
+    fireEvent.click(addBtn);
+
+    expect(screen.getByText('选择数据源')).toBeInTheDocument();
+    expect(screen.getByTestId('source-checkboxes')).toBeInTheDocument();
+    expect(screen.getAllByText('pubmed').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('biorxiv').length).toBeGreaterThan(0);
+  });
+
+  it('取消按钮关闭 Modal', async () => {
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: [
+        {
+          id: 't1',
+          step_type: 'tool_call',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00Z',
+          evidence: {
+            query: 'EGFR',
+            sources: ['pubmed'],
+            total_hits: { pubmed: 1 },
+            papers: [{ id: 'p1', title: 'Paper A', source: 'pubmed', year: 2024 }],
+          },
+        },
+      ],
+    });
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    const toggle = await screen.findByText('tool call');
+    fireEvent.click(toggle);
+
+    fireEvent.click(await screen.findByText('调整检索词'));
+    expect(screen.getByTestId('edit-query-input')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('取消'));
+    expect(screen.queryByTestId('edit-query-input')).not.toBeInTheDocument();
+  });
+
+  it('编辑检索词后输入框内容更新', async () => {
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: [
+        {
+          id: 't1',
+          step_type: 'tool_call',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00Z',
+          evidence: {
+            query: 'original',
+            sources: ['pubmed'],
+            total_hits: { pubmed: 2 },
+            papers: [{ id: 'p1', title: 'Old Paper', source: 'pubmed', year: 2024 }],
+          },
+        },
+      ],
+    });
+
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    const toggle = await screen.findByText('tool call');
+    fireEvent.click(toggle);
+
+    fireEvent.click(await screen.findByText('调整检索词'));
+    const input = screen.getByTestId('edit-query-input');
+    expect(input).toHaveValue('original');
+
+    fireEvent.change(input, { target: { value: 'updated query' } });
+    expect(input).toHaveValue('updated query');
+  });
+
+  it('空检索词时重新检索按钮禁用', async () => {
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: [
+        {
+          id: 't1',
+          step_type: 'tool_call',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00Z',
+          evidence: {
+            query: 'EGFR',
+            sources: ['pubmed'],
+            total_hits: { pubmed: 1 },
+            papers: [{ id: 'p1', title: 'Paper A', source: 'pubmed', year: 2024 }],
+          },
+        },
+      ],
+    });
+
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    fireEvent.click(await screen.findByText('tool call'));
+    fireEvent.click(await screen.findByText('调整检索词'));
+
+    const input = screen.getByTestId('edit-query-input');
+    fireEvent.change(input, { target: { value: '' } });
+
+    const submitBtn = screen.getByText('重新检索');
+    expect(submitBtn).toBeDisabled();
   });
 });
