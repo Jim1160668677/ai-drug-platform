@@ -156,7 +156,7 @@ async def chat(
         result = await orchestrator.chat(
             session_id=session.id, message=body.message, user=user,
             project_id=str(body.project_id) if body.project_id else None,
-            force_mode=body.force_mode,
+            force_mode=body.force_mode, tier=body.tier,
         )
     except Exception as e:
         logger.exception("[intelligence] 对话失败: %s", e)
@@ -614,6 +614,7 @@ async def unified_agent_chat(
             project_id=str(body.project_id) if body.project_id else None,
             capability_hint=body.capability_hint,
             force_mode=body.force_mode,
+            tier=body.tier,
         )
 
         capability_used = result.get("capability", "qa")

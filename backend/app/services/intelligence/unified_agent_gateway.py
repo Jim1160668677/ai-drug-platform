@@ -203,9 +203,10 @@ class UnifiedAgentGateway:
         project_id: Optional[str] = None,
         capability_hint: Optional[str] = None,
         force_mode: Optional[str] = None,
+        tier: Optional[str] = None,
     ) -> Dict[str, Any]:
         start_time = datetime.now(timezone.utc)
-        
+
         try:
             if settings.INTELLIGENCE_USE_UNIFIED_ORCHESTRATOR:
                 return await self._chat_via_orchestrator(
@@ -215,6 +216,7 @@ class UnifiedAgentGateway:
                     project_id=project_id,
                     capability_hint=capability_hint,
                     force_mode=force_mode,
+                    tier=tier,
                     start_time=start_time,
                 )
             
@@ -295,6 +297,7 @@ class UnifiedAgentGateway:
         project_id: Optional[str],
         capability_hint: Optional[str],
         force_mode: Optional[str],
+        tier: Optional[str],
         start_time: datetime,
     ) -> Dict[str, Any]:
         orchestrator = self._get_orchestrator()
@@ -316,6 +319,7 @@ class UnifiedAgentGateway:
             user=user,
             project_id=project_id,
             force_mode=effective_force,
+            tier=tier,
         )
         
         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -338,6 +342,8 @@ class UnifiedAgentGateway:
                 "mode": mode,
                 "cost_usd": result.get("cost_usd", 0),
                 "duration_sec": result.get("duration_sec", 0),
+                "tier": result.get("tier", "standard"),
+                "tier_reason": result.get("tier_reason", None),
             },
         }
         
