@@ -18,6 +18,15 @@ import { api } from './client';
 
 export type PrimaryMode = 'chat' | 'reasoning' | 'agent' | 'hybrid' | 'auto';
 
+export type TierChoice = 'auto' | 'turbo' | 'standard' | 'deep';
+
+export interface TierSuggestResponse {
+  tier: string;
+  reason: string;
+  confidence: number;
+  tier_config: Record<string, unknown>;
+}
+
 export interface SessionResponse {
   id: string;
   user_id: string;
@@ -51,11 +60,14 @@ export interface ChatRequest {
   message: string;
   project_id?: string;
   force_mode?: PrimaryMode;
+  tier?: TierChoice;
 }
 
 export interface ChatResponse {
   answer: string;
   mode: string;
+  tier?: string;
+  tier_reason?: string;
   [key: string]: unknown;
 }
 
@@ -303,11 +315,12 @@ export const archiveSession = (
 export const sendChat = (
   sessionId: string,
   message: string,
-  options: { projectId?: string; forceMode?: PrimaryMode } = {}
+  options: { projectId?: string; forceMode?: PrimaryMode; tier?: TierChoice } = {}
 ): Promise<ChatResponse> => {
   const body: ChatRequest = { message };
   if (options.projectId) body.project_id = options.projectId;
   if (options.forceMode) body.force_mode = options.forceMode;
+  if (options.tier && options.tier !== 'auto') body.tier = options.tier;
   return api
     .post(`/intelligence/sessions/${sessionId}/chat`, body)
     .then(unwrap<ChatResponse>);
@@ -331,6 +344,7 @@ export const streamChat = async (
   options: {
     projectId?: string;
     forceMode?: PrimaryMode;
+    tier?: TierChoice;
     onChunk?: (chunk: string) => void;
     onDone?: (fullText: string) => void;
     onError?: (err: Error) => void;
@@ -342,6 +356,7 @@ export const streamChat = async (
   const body: ChatRequest = { message };
   if (options.projectId) body.project_id = options.projectId;
   if (options.forceMode) body.force_mode = options.forceMode;
+  if (options.tier && options.tier !== 'auto') body.tier = options.tier;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -553,3 +568,16 @@ export interface ReexecuteResponse {
 
 export const reexecuteAcademicSearch = (payload: ReexecutePayload): Promise<ReexecuteResponse> =>
   api.post('/knowledge/academic-search/reexecute', payload).then(unwrap<ReexecuteResponse>);
+
+// ============================================================================
+// 7. Tier 推荐
+// ============================================================================
+
+export const suggestTier = (
+  sessionId: string,
+  message: string,
+): Promise<TierSuggestResponse> => {
+  return api
+    .post(`/intelligence/sessions/${sessionId}/suggest-tier`, { message })
+    .then(unwrap<TierSuggestResponse>);
+};
