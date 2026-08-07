@@ -96,7 +96,12 @@ export interface TraceStep {
   duration_sec?: number | null;
   status: string;
   created_at?: string | null;
-  evidence?: EvidencePaper[];
+  evidence?: {
+    query: string;
+    sources: string[];
+    total_hits: Record<string, number>;
+    papers: EvidencePaper[];
+  } | null;
 }
 
 export interface TraceResponse {
