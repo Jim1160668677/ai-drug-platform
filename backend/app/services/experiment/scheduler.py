@@ -39,6 +39,7 @@ class ExperimentScheduler:
                 project_id: str,
                 steps: [...],
                 nextflow_params: {...},
+                nextflow_pipeline: str,
                 lims_csv: str,
                 conflicts: [],
                 audit_log_id: str,
@@ -51,6 +52,7 @@ class ExperimentScheduler:
         compiled = self.compiler.compile(dsl)
         steps = compiled["steps"]
         nextflow_params = compiled["nextflow_params"]
+        nextflow_pipeline = nextflow_params.get("pipeline", "generic_pipeline.nf")
         lims_csv = compiled["lims_csv"]
 
         conflicts = self.detect_conflicts([], {
@@ -66,6 +68,7 @@ class ExperimentScheduler:
             "project_id": project_id,
             "steps": steps,
             "nextflow_params": nextflow_params,
+            "nextflow_pipeline": nextflow_pipeline,
             "lims_csv": lims_csv,
             "conflicts": conflicts,
             "audit_log_id": audit_log_id,
@@ -76,8 +79,8 @@ class ExperimentScheduler:
             result["hypothesis_ids"] = hypothesis_ids
 
         logger.info(
-            "Experiment scheduled: schedule_id=%s exp_type=%s steps=%d",
-            schedule_id, dsl.exp_type, len(steps),
+            "Experiment scheduled: schedule_id=%s exp_type=%s pipeline=%s steps=%d",
+            schedule_id, dsl.exp_type, nextflow_pipeline, len(steps),
         )
         return result
 
