@@ -521,3 +521,49 @@ class TestAcademicSearchReexecute:
         step_uuid = UUID(data["step_id"])
         step = await db_session.get(ReasoningTrace, step_uuid)
         assert step.parent_step_id is None
+
+    @pytest.mark.asyncio
+    async def test_add_sources_merges_with_parent(self, client, db_session):
+        """add_sources 应与父步骤现有源合并，而非替换"""
+        session_id = uuid4()
+        from app.models.unified_session import UnifiedSession
+        sess = UnifiedSession(
+            id=session_id,
+            user_id=TEST_USER_ID,
+            title="Merge Sources Test",
+            status="active",
+            primary_mode="reasoning",
+        )
+        db_session.add(sess)
+        await db_session.commit()
+
+        original_step_id = _create_trace_step(
+            db_session, session_id, "tool_call",
+            input_data={"query": "test merge", "sources": ["pubmed", "biorxiv"]},
+            output_data={"total_hits": {"pubmed": 5, "biorxiv": 3}, "papers": []},
+        )
+        await db_session.commit()
+
+        resp = await client.post(
+            "/api/v1/knowledge/academic-search/reexecute",
+            json={
+                "session_id": str(session_id),
+                "original_step_id": str(original_step_id),
+                "add_sources": ["arxiv", "pubmed"],
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        data = body["data"]
+
+        # 合并后的源应包含父步骤的所有源加上新增的去重
+        sources_queried = data["sources_queried"]
+        assert "pubmed" in sources_queried
+        assert "biorxiv" in sources_queried
+        assert "arxiv" in sources_queried
+
+        from app.models.reasoning_trace import ReasoningTrace
+        step_uuid = UUID(data["step_id"])
+        step = await db_session.get(ReasoningTrace, step_uuid)
+        persisted_sources = step.input_data["sources"]
+        assert set(persisted_sources) == {"pubmed", "biorxiv", "arxiv"}

@@ -135,10 +135,12 @@ export default function TraceTimeline({ sessionId, limit = 200, onSelectRun }: T
     if (modalState.type === 'edit_query') {
       reexecuteMutation.mutate({ original_step_id: modalState.stepId, query: editQuery });
     } else {
-      const addSources = ALL_SOURCES.filter(s => selectedSources.has(s));
-      reexecuteMutation.mutate({ original_step_id: modalState.stepId, add_sources: addSources });
+      const currentStep = data?.traces.find((s: TraceStep) => s.id === modalState.stepId);
+      const parentSources = new Set(currentStep?.evidence?.sources ?? []);
+      const delta = ALL_SOURCES.filter(s => selectedSources.has(s) && !parentSources.has(s));
+      reexecuteMutation.mutate({ original_step_id: modalState.stepId, add_sources: delta });
     }
-  }, [modalState, editQuery, selectedSources, reexecuteMutation]);
+  }, [modalState, editQuery, selectedSources, reexecuteMutation, data?.traces]);
 
   if (isLoading) {
     return (

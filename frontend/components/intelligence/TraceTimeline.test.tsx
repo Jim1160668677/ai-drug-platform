@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '@/lib/test-utils';
 import TraceTimeline from './TraceTimeline';
 
@@ -16,8 +16,9 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-import { getTrace } from '@/lib/api';
+import { getTrace, reexecuteAcademicSearch } from '@/lib/api';
 const mockedGetTrace = vi.mocked(getTrace);
+const mockedReexecute = vi.mocked(reexecuteAcademicSearch);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -379,5 +380,68 @@ describe('TraceTimeline', () => {
 
     const submitBtn = screen.getByText('重新检索');
     expect(submitBtn).toBeDisabled();
+  });
+
+  it('完整 reexecute 流程：mutation 后新步骤出现在时间线', async () => {
+    const initialTraces = [
+      {
+        id: 't1',
+        step_type: 'tool_call',
+        status: 'completed',
+        created_at: '2026-01-01T00:00:00Z',
+        evidence: {
+          query: 'original query',
+          sources: ['pubmed'],
+          total_hits: { pubmed: 5 },
+          papers: [{ id: 'p1', title: 'Original Paper', source: 'pubmed', year: 2024 }],
+        },
+      },
+    ];
+
+    mockedGetTrace.mockResolvedValue({
+      session_id: 's1',
+      total_steps: 1,
+      traces: initialTraces,
+    });
+
+    mockedReexecute.mockResolvedValue({
+      step_id: 'new-step-1',
+      parent_step_id: 't1',
+      query: 'updated query',
+      sources_queried: ['pubmed', 'arxiv'],
+      total_hits: { pubmed: 5, arxiv: 3 },
+      papers: [
+        { id: 'p2', title: 'New Arxiv Paper', source: 'arxiv', year: 2025 },
+      ],
+      search_time_ms: 150,
+    });
+
+    renderWithProviders(<TraceTimeline sessionId="s1" />);
+
+    // 展开原始步骤
+    const toggle = await screen.findByText('tool call');
+    fireEvent.click(toggle);
+
+    // 点击调整检索词
+    fireEvent.click(await screen.findByText('调整检索词'));
+
+    // 修改检索词并提交
+    const input = screen.getByTestId('edit-query-input');
+    fireEvent.change(input, { target: { value: 'updated query' } });
+    fireEvent.click(screen.getByText('重新检索'));
+
+    // 验证 mutation 被调用
+    await waitFor(() => {
+      expect(mockedReexecute).toHaveBeenCalledWith({
+        session_id: 's1',
+        original_step_id: 't1',
+        query: 'updated query',
+      });
+    });
+
+    // 验证新步骤出现在时间线中
+    await waitFor(() => {
+      expect(screen.getByText(/New Arxiv Paper/)).toBeInTheDocument();
+    });
   });
 });

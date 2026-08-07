@@ -74,7 +74,7 @@ export interface ContextResponse {
 }
 
 export interface EvidencePaper {
-  id: string;
+  id?: string;
   title: string;
   authors?: string[];
   year?: number;
