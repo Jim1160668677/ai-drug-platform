@@ -73,6 +73,18 @@ export interface ContextResponse {
   context_prompt: string;
 }
 
+export interface EvidencePaper {
+  id: string;
+  title: string;
+  authors?: string[];
+  year?: number;
+  source: string;
+  url?: string;
+  doi?: string;
+  abstract?: string;
+  relevance_score?: number;
+}
+
 export interface TraceStep {
   id: string;
   step_type: string;
@@ -84,6 +96,7 @@ export interface TraceStep {
   duration_sec?: number | null;
   status: string;
   created_at?: string | null;
+  evidence?: EvidencePaper[];
 }
 
 export interface TraceResponse {
