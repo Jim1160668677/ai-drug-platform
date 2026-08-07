@@ -332,6 +332,50 @@ class AnalyzeDatasetTool(AgentTool):
             logger.error(f"analyze_dataset 失败: {e}", exc_info=True)
             return ToolResult.fail(error=str(e))
 
+    async def _generate_llm_conclusion(
+        self,
+        analysis_result: Dict[str, Any],
+        ctx: ToolContext,
+    ) -> str:
+        """LLM 生成自然语言专业结论"""
+        if not analysis_result:
+            return "无数据可供分析。"
+
+        stats = analysis_result.get("statistics", {})
+        chart_data = analysis_result.get("chart_data", [])
+
+        # 简单的规则基结论生成 (Mock 模式，无 LLM 调用)
+        if not stats:
+            return "数据分析完成，但统计结果为空。"
+
+        conclusion_parts = []
+
+        # 均值趋势
+        mean = stats.get("mean")
+        if mean is not None:
+            conclusion_parts.append(f"数据显示平均值为 {mean:.2f}")
+
+        # 标准差/变异性
+        std = stats.get("std")
+        if std is not None and mean is not None:
+            cv = (std / abs(mean)) * 100 if mean != 0 else float('inf')
+            if cv < 10:
+                conclusion_parts.append("变异系数较低，数据一致性较好")
+            elif cv < 30:
+                conclusion_parts.append("变异系数中等，数据有一定离散度")
+            else:
+                conclusion_parts.append("变异系数较高，数据离散度大")
+
+        # 样本量
+        count = analysis_result.get("count", 0)
+        if count > 0:
+            conclusion_parts.append(f"基于 {count} 个样本点")
+
+        if not conclusion_parts:
+            return "数据分析完成。"
+
+        return "。".join(conclusion_parts) + "。"
+
 
 class QueryDataTool(AgentTool):
     """查询数据 — 按条件检索数据集/靶点/分子等"""
