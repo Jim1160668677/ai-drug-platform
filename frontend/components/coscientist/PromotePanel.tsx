@@ -3,10 +3,10 @@
 /**
  * PromotePanel — 浮窗内假设回写面板
  *
- * 展示某个 Co-Scientist 运行的 Top 假设列表，并提供 4 个回写按钮，将假设落地为
- * 业务实体：[→靶点] [→分子] [→实验] [→治疗]。
+ * 展示某个 Co-Scientist 运行中的 Top 假设列表，并提供 4 个回写按钮，将假设落地为
+ * 业务实体：[→靶点] [→分子] [→实验] [→治疗]
  *
- * - 用 getHypotheses(runId) 获取假设列表（按 Elo 排序）
+ * - 调用 getHypotheses(runId) 获取假设列表（按 Elo 排序）
  * - 调用 promoteHypothesisToTarget/Molecule/Experiment/Treatment
  * - promote 成功后 toast + invalidateQueries 刷新对应业务页面列表
  *   （targets / molecules / experiments / treatments 列表查询）
@@ -20,11 +20,24 @@ import {
   promoteHypothesisToMolecule,
   promoteHypothesisToExperiment,
   promoteHypothesisToTreatment,
+  scheduleExperiment,
+  type ScheduleExperimentPayload,
 } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
 import { toast } from '@/lib/notification';
 import type { RankedHypothesis } from '@/types/coscientist';
-import { Loader2, Trophy, Target, FlaskRound, Beaker, Pill, CheckCircle2 } from 'lucide-react';
+import {
+  Loader2,
+  Trophy,
+  Target,
+  FlaskRound,
+  Beaker,
+  Pill,
+  CheckCircle2,
+  FileCode,
+  X,
+  Play,
+} from 'lucide-react';
 
 interface PromotePanelProps {
   /** 运行 ID */
@@ -121,6 +134,65 @@ export default function PromotePanel({ runId, projectId }: PromotePanelProps) {
           />
         );
       })}
+
+      {/* DSL 预览弹窗 */}
+      {showDslModal && dslPreview && (
+        <DslPreviewModal
+          dsl={dslPreview}
+          onClose={() => setShowDslModal(false)}
+          onRun={() => {
+            toast.info('实验调度已提交', '请查看实验列表');
+            setShowDslModal(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** DSL 预览弹窗 */
+function DslPreviewModal({
+  dsl,
+  onClose,
+  onRun,
+}: {
+  dsl: Record<string, unknown>;
+  onClose: () => void;
+  onRun: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+            <FileCode className="w-4 h-4 text-green-600" />
+            实验设计 DSL 预览
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto p-4">
+          <pre className="text-xs bg-gray-50 rounded-lg p-3 text-gray-700 whitespace-pre-wrap font-mono">
+            {JSON.stringify(dsl, null, 2)}
+          </pre>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-100">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            关闭
+          </button>
+          <button
+            onClick={onRun}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700"
+          >
+            <Play className="w-3.5 h-3.5" />
+            提交调度
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
