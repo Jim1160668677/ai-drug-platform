@@ -108,6 +108,7 @@ class TraceStep(BaseSchema):
     duration_sec: Optional[float] = None
     status: str = "completed"
     created_at: Optional[datetime] = None
+    evidence: Optional[Dict[str, Any]] = None
 
 
 class TraceResponse(BaseSchema):

@@ -35,6 +35,25 @@ from app.services.intelligence.channels.agent import AgentChannel
 logger = logging.getLogger(__name__)
 
 
+def _extract_evidence(step) -> Optional[Dict[str, Any]]:
+    """从推理步骤中提取证据数据（仅 tool_call 步骤）
+
+    Args:
+        step: ReasoningTrace 实例
+
+    Returns:
+        tool_call 步骤返回证据 dict，其他步骤返回 None
+    """
+    if step.step_type != "tool_call":
+        return None
+    return {
+        "query": (step.input_data or {}).get("query", ""),
+        "sources": (step.input_data or {}).get("sources", []),
+        "total_hits": (step.output_data or {}).get("total_hits", {}),
+        "papers": (step.output_data or {}).get("papers", []),
+    }
+
+
 class UnifiedOrchestrator:
     """统一编排器 — 融合三模式的统一入口
 
@@ -424,6 +443,7 @@ class UnifiedOrchestrator:
                     "duration_sec": t.duration_sec,
                     "status": t.status,
                     "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "evidence": _extract_evidence(t),
                 }
                 for t in traces
             ],

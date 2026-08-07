@@ -258,7 +258,8 @@ async def get_trace(
         TraceStep(id=t["id"], step_type=t["step_type"], agent_name=t["agent_name"],
                   phase=t["phase"], round_num=t["round_num"], decision_basis=t["decision_basis"],
                   cost_usd=t["cost_usd"], duration_sec=t["duration_sec"],
-                  status=t["status"], created_at=t["created_at"])
+                  status=t["status"], created_at=t["created_at"],
+                  evidence=t.get("evidence"))
         for t in trace_data.get("traces", [])[:limit]
     ]
     resp = TraceResponse(session_id=str(session.id), total_steps=trace_data.get("total_steps", 0), traces=traces)
