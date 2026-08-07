@@ -463,7 +463,7 @@ class TestAcademicSearchReexecute:
 
     @pytest.mark.asyncio
     async def test_reexecute_returns_404_for_missing_parent(self, client, db_session):
-        """引用不存在的原始步骤应返回错误"""
+        """引用不存在的原始步骤应返回 404"""
         session_id = uuid4()
         from app.models.unified_session import UnifiedSession
         sess = UnifiedSession(
@@ -485,10 +485,7 @@ class TestAcademicSearchReexecute:
                 "query": "test query",
             },
         )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is False
-        assert "不存在" in body["message"]
+        assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_reexecute_without_parent(self, client, db_session):

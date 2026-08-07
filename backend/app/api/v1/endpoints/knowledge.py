@@ -3,7 +3,7 @@ import time
 from typing import Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -214,8 +214,9 @@ async def academic_search(payload: AcademicSearchRequest, current_user: User = D
 class AcademicSearchReexecuteRequest(BaseModel):
     session_id: UUID
     original_step_id: Optional[UUID] = None
-    query: str = Field(..., min_length=1, max_length=500)
+    query: Optional[str] = Field(default=None, min_length=1, max_length=500)
     sources: List[str] = Field(default=["pubmed", "biorxiv", "arxiv", "semantic_scholar", "crossref"])
+    add_sources: Optional[List[str]] = None
     limit_per_source: int = Field(default=10, ge=1, le=50)
     year_from: Optional[int] = Field(default=None, ge=1900, le=2100)
     year_to: Optional[int] = Field(default=None, ge=1900, le=2100)
@@ -246,19 +247,28 @@ async def academic_search_reexecute(
     from app.services.analyzer.academic_search_client import AcademicSearchClient
 
     parent_step_id = payload.original_step_id
+    parent = None
 
     if parent_step_id:
-        existing = await db.get(ReasoningTrace, parent_step_id)
-        if not existing:
-            return StandardResponse(
-                success=False,
-                message=f"原始追溯步骤不存在: {parent_step_id}",
-                data={"step_id": str(parent_step_id)},
-            )
+        parent = await db.get(ReasoningTrace, parent_step_id)
+        if not parent:
+            raise HTTPException(status_code=404, detail=f"原始追溯步骤不存在: {parent_step_id}")
+
+    query = payload.query
+    if query is None and parent is not None:
+        query = parent.input_data.get("query", "")
+
+    sources = payload.sources
+    if parent is not None:
+        parent_sources = parent.input_data.get("sources", [])
+        if payload.add_sources:
+            sources = list(set(parent_sources + payload.add_sources))
+        else:
+            sources = parent_sources
 
     t0 = time.time()
     client = AcademicSearchClient()
-    raw = await client.search_all(payload.query, payload.sources, payload.limit_per_source,
+    raw = await client.search_all(query, sources, payload.limit_per_source,
                                  payload.year_from, payload.year_to)
     papers = [p for plist in raw.values() for p in plist]
     total_hits = {src: len(plist) for src, plist in raw.items()}
@@ -272,8 +282,8 @@ async def academic_search_reexecute(
         parent_step_id=parent_step_id,
         step_type="tool_call",
         input_data={
-            "query": payload.query,
-            "sources": payload.sources,
+            "query": query,
+            "sources": sources,
             "year_from": payload.year_from,
             "year_to": payload.year_to,
             "reexecute": True,
@@ -291,8 +301,8 @@ async def academic_search_reexecute(
     return success_response(AcademicSearchReexecuteResponse(
         step_id=str(new_step.id),
         parent_step_id=str(parent_step_id) if parent_step_id else None,
-        query=payload.query,
-        sources_queried=payload.sources,
+        query=query,
+        sources_queried=sources,
         total_hits=total_hits,
         papers=[p.model_dump() for p in papers],
         search_time_ms=elapsed,
