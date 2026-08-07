@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
+import type { TierChoice } from '@/lib/api';
 
 export type CapabilityType = 'qa' | 'reasoning' | 'agent' | 'auto';
 
@@ -41,6 +42,8 @@ export interface UnifiedMessage {
     sources?: Array<{ text: string }>;
     run_id?: string;
     cost_usd?: number;
+    tier?: string;
+    tier_reason?: string;
   };
   suggestions?: SuggestionAction[];
   toolCalls?: Array<{
@@ -84,6 +87,7 @@ export interface UnifiedAgentState {
   isSending: boolean;
   inputValue: string;
   capability: CapabilityType;
+  tier: TierChoice;
   availableCapabilities: Array<{
     type: string;
     name: string;
@@ -103,10 +107,11 @@ export interface UnifiedAgentState {
 
 export interface UnifiedAgentActions {
   setInputValue: (value: string) => void;
-  sendMessage: (message?: string, capabilityHint?: CapabilityType) => Promise<void>;
+  sendMessage: (message?: string, capabilityHint?: CapabilityType, tierHint?: TierChoice) => Promise<void>;
   selectSession: (sessionId: string) => void;
   createNewSession: () => Promise<string>;
   setCapability: (capability: CapabilityType) => void;
+  setTier: (tier: TierChoice) => void;
   clearError: () => void;
   applySuggestion: (suggestion: SuggestionAction) => void;
   loadCapabilities: () => Promise<void>;
@@ -160,6 +165,10 @@ export function useUnifiedAgent(initialSessionId?: string): UnifiedAgent {
   const [inputValue, setInputValue] = useState('');
 
   const [capability, setCapabilityState] = useState<CapabilityType>('auto');
+  const [tier, setTierState] = useState<TierChoice>('auto');
+  const setTier = useCallback((newTier: TierChoice) => {
+    setTierState(newTier);
+  }, []);
 
   const [availableCapabilities, setAvailableCapabilities] = useState<UnifiedAgentState['availableCapabilities']>([]);
   const [suggestions, setSuggestions] = useState<SuggestionAction[]>([]);
@@ -207,11 +216,12 @@ export function useUnifiedAgent(initialSessionId?: string): UnifiedAgent {
     }
   }, []);
 
-  const sendMessage = useCallback(async (message?: string, capabilityHint?: CapabilityType) => {
+  const sendMessage = useCallback(async (message?: string, capabilityHint?: CapabilityType, tierHint?: TierChoice) => {
     const text = (message ?? inputValue).trim();
     if (!text || isSending) return;
 
     const effectiveCapability = capabilityHint || capability;
+    const effectiveTier = tierHint || tier;
 
     const userMessage: UnifiedMessage = {
       id: `user-${Date.now()}`,
@@ -267,6 +277,7 @@ export function useUnifiedAgent(initialSessionId?: string): UnifiedAgent {
         message: text,
         capability_hint: effectiveCapability,
         ...(currentProject?.id ? { project_id: currentProject.id } : {}),
+        ...(effectiveTier && effectiveTier !== 'auto' ? { tier: effectiveTier } : {}),
       }, {
         params: { session_id: sessionId },
         timeout: timeoutMs,
@@ -301,6 +312,8 @@ export function useUnifiedAgent(initialSessionId?: string): UnifiedAgent {
             run_id: responseContent?.run_id,
             elapsed_seconds: result.metadata?.elapsed_seconds,
             cost_usd: responseContent?.total_cost || result.metadata?.cost_usd,
+            tier: result.metadata?.tier,
+            tier_reason: result.metadata?.tier_reason,
           },
           suggestions: result.suggestions,
           task_id: responseContent?.task_id,
@@ -355,7 +368,7 @@ export function useUnifiedAgent(initialSessionId?: string): UnifiedAgent {
       setIsSending(false);
       setSendProgress(null);
     }
-  }, [inputValue, isSending, capability, currentSessionId, currentProject]);
+  }, [inputValue, isSending, capability, tier, currentSessionId, currentProject]);
 
   const createNewSession = useCallback(async (): Promise<string> => {
     try {
@@ -486,6 +499,8 @@ export function useUnifiedAgent(initialSessionId?: string): UnifiedAgent {
     isSending,
     inputValue,
     capability,
+    tier,
+    setTier,
     availableCapabilities,
     suggestions,
     error,

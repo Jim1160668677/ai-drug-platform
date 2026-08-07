@@ -20,6 +20,7 @@ vi.mock('@/hooks/useIntelligenceChat', () => ({
 }));
 
 vi.mock('@/lib/api', () => ({
+  api: { get: vi.fn(), post: vi.fn() },
   listSessions: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   createSession: vi.fn(), archiveSession: vi.fn(), getSession: vi.fn(),
   forceMode: vi.fn(), sendChat: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('@/lib/api', () => ({
   normalizeMultimodal: vi.fn(), analyzeVision: vi.fn(),
   listRules: vi.fn().mockResolvedValue({ presets: [], rulesets: [], total_rules: 0 }),
   getRulePreset: vi.fn(), executeRules: vi.fn(), validateRules: vi.fn(),
+  suggestTier: vi.fn().mockResolvedValue({ tier: 'standard', reason: 'test', confidence: 0.8, tier_config: {} }),
 }));
 
 vi.mock('@/lib/store', () => ({
@@ -78,5 +80,10 @@ describe('IntelligencePage 集成测试', () => {
     renderWithProviders(<IntelligencePage />);
     fireEvent.click(screen.getByText('分析'));
     expect(document.body).toBeInTheDocument();
+  });
+
+  it('renders TierBar component', () => {
+    renderWithProviders(<IntelligencePage />);
+    expect(screen.getByText(/智能选档/)).toBeInTheDocument();
   });
 });

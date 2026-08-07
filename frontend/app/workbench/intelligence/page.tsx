@@ -33,7 +33,10 @@ import {
   type CapabilityType,
   type UnifiedMessage,
   type SuggestionAction,
+  type TierChoice,
 } from '@/hooks/useUnifiedAgent';
+import { TierBar } from '@/components/intelligence/TierBar';
+import { suggestTier } from '@/lib/api';
 import Card from '@/components/ui/Card';
 import EmptyState from '@/components/ui/EmptyState';
 import DagPhaseTimeline, { type DagNodeStatusEvent } from '@/components/agent/DagPhaseTimeline';
@@ -72,6 +75,8 @@ export default function IntelligencePage() {
     messages,
     inputValue,
     capability,
+    tier,
+    setTier,
     availableCapabilities,
     suggestions,
     error,
@@ -91,6 +96,9 @@ export default function IntelligencePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
+  const [recommendedTier, setRecommendedTier] = useState<string | null>(null);
+  const [recommendedReason, setRecommendedReason] = useState<string | null>(null);
+  const lastMessage = messages[messages.length - 1];
 
   const [dagEvents, setDagEvents] = useState<DagNodeStatusEvent[]>([]);
   const [stepTraceEvents, setStepTraceEvents] = useState<StepTraceEvent[]>([]);
@@ -222,8 +230,8 @@ export default function IntelligencePage() {
   }, [createNewSession]);
 
   const handleSend = useCallback(() => {
-    sendMessage();
-  }, [sendMessage]);
+    sendMessage(undefined, undefined, tier);
+  }, [sendMessage, tier]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -751,6 +759,18 @@ export default function IntelligencePage() {
             placeholder={`以「${capabilityMeta.label}」能力回答…（Enter 发送，Shift+Enter 换行）`}
             className="w-full resize-none bg-transparent px-3.5 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
           />
+          <div className="flex items-center justify-between mb-2 px-3 py-2">
+            <TierBar
+              value={tier}
+              onValueChange={setTier}
+              recommended={recommendedTier}
+              recommendedReason={recommendedReason}
+              disabled={isSending}
+            />
+            <span className="text-[10px] text-gray-400">
+              {lastMessage?.metadata?.tier ? `已用 ${lastMessage.metadata.tier} · $${lastMessage.metadata.cost_usd?.toFixed(4)}` : ''}
+            </span>
+          </div>
           <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
             <div className="flex items-center gap-2 text-[11px] text-gray-500">
               <CurrentCapIcon className="w-3.5 h-3.5 text-primary-500" />
