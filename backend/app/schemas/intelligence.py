@@ -61,6 +61,7 @@ class ChatRequest(BaseModel):
     project_id: Optional[UUID] = Field(None, description="项目 ID（覆盖会话）")
     force_mode: Optional[str] = Field(None, description="强制模式: chat/reasoning/agent/hybrid")
     capability_hint: Optional[str] = Field(None, description="能力提示: qa/reasoning/agent/auto（Agent网关使用）")
+    tier: Optional[str] = Field(None, description="档位: turbo/standard/deep,None 或 auto 时智能推荐")
 
 
 class ChatResponse(BaseSchema):
@@ -71,6 +72,21 @@ class ChatResponse(BaseSchema):
     session_id: str
     cost_usd: float = 0.0
     duration_sec: float = 0.0
+    tier: str = Field("standard", description="实际使用的档位")
+    tier_reason: Optional[str] = Field(None, description="档位选择原因")
+
+
+class TierSuggestRequest(BaseModel):
+    """档位推荐请求"""
+    message: str = Field(..., min_length=1, max_length=5000, description="用户消息")
+
+
+class TierSuggestResponse(BaseSchema):
+    """档位推荐响应"""
+    tier: str = Field(..., description="推荐档位 turbo/standard/deep")
+    reason: str = Field("", description="推荐原因")
+    confidence: float = Field(0.0, description="意图置信度 0-1")
+    tier_config: Dict[str, Any] = Field(default_factory=dict, description="档位配置")
 
 
 class ForceModeRequest(BaseModel):
@@ -307,7 +323,7 @@ __all__ = [
     # 会话管理
     "SessionCreate", "SessionResponse", "SessionListResponse", "SessionArchive",
     # 统一对话
-    "ChatRequest", "ChatResponse", "ForceModeRequest",
+    "ChatRequest", "ChatResponse", "TierSuggestRequest", "TierSuggestResponse", "ForceModeRequest",
     # 上下文与追溯
     "ContextMemoryItem", "ContextResponse", "TraceStep", "TraceResponse",
     "TraceTreeResponse", "CostBreakdownResponse", "DecisionChainResponse",
