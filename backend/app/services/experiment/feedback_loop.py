@@ -394,9 +394,9 @@ class FeedbackLoop:
             elo_change = 0.0
 
             if conclusion == "VALIDATED":
-                elo_change = 15 * effective_confidence
+                elo_change = K_FACTOR * effective_confidence
             elif conclusion == "REFUTED":
-                elo_change = -25 * effective_confidence
+                elo_change = -K_FACTOR * 1.5 * effective_confidence
 
             elo_after = elo_before + elo_change
             hypothesis.elo_score = elo_after

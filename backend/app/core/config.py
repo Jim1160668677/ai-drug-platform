@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     API_KEY_ENCRYPTION_KEY: str = ""
 
     # ========== 数据库 ==========
-    DATABASE_URL: str = "postgresql+asyncpg://pdd:pdd_secret@postgres:5432/precision_drug"
+    # 生产环境必须通过环境变量设置 DATABASE_URL
+    DATABASE_URL: str = ""
 
     # ========== Redis ==========
     REDIS_HOST: str = "redis"
@@ -55,7 +56,7 @@ class Settings(BaseSettings):
     NEO4J_HOST: str = "neo4j"
     NEO4J_BOLT_PORT: int = 7687
     NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "neo4j_secret"
+    NEO4J_PASSWORD: str = ""
 
     # ========== MinIO ==========
     MINIO_ENDPOINT: str = "minio:9000"

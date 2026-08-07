@@ -470,18 +470,27 @@ async def create_run(
     await db.commit()
     await db.refresh(run)
 
-    # 异步启动 Supervisor
+    # 异步启动 Supervisor（带错误恢复）
     # 修复 B1：传递 project_id 给 _run_supervisor，确保运行结束后假设能持久化到 Hypothesis 表
     llm_client = await get_llm_client_with_fallback(db)
-    asyncio.create_task(_run_supervisor(
-        run_id=str(run.id),
-        research_goal=body.research_goal,
-        max_rounds=body.max_rounds,
-        initial_count=body.initial_hypothesis_count,
-        case_type=body.case_type,
-        llm_client=llm_client,
-        project_id=str(run.project_id) if run.project_id else None,
-    ))
+
+    async def _safe_run_supervisor():
+        """包装 Supervisor 运行，确保异常时标记失败"""
+        try:
+            await _run_supervisor(
+                run_id=str(run.id),
+                research_goal=body.research_goal,
+                max_rounds=body.max_rounds,
+                initial_count=body.initial_hypothesis_count,
+                case_type=body.case_type,
+                llm_client=llm_client,
+                project_id=str(run.project_id) if run.project_id else None,
+            )
+        except Exception as e:
+            logger.exception("[coscientist] 后台任务异常: %s", e)
+            await _mark_run_failed(str(run.id), f"后台任务异常: {e}")
+
+    asyncio.create_task(_safe_run_supervisor())
 
     # 更新状态为 RUNNING
     run.status = RunStatus.RUNNING

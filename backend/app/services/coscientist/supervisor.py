@@ -748,13 +748,32 @@ class Supervisor:
     ) -> List[Dict[str, Any]]:
         """合并进化结果到假设列表
 
+        按 hypothesis ID 匹配，而非位置。
         keep 策略：保留原假设
         其他策略：用进化后的假设替换（保留原 ID 用于追踪）
         """
+        # 构建 ID → evolved hypothesis 映射
+        evolved_by_id = {}
+        for result in evolution_results:
+            hyp_id = result.get("hypothesis_id") or result.get("id")
+            if hyp_id:
+                evolved_by_id[hyp_id] = result.get("evolved_hypothesis", result.get("hypothesis", {}))
+
         merged = []
-        for orig, result in zip(original, evolution_results):
-            evolved = result.get("evolved_hypothesis", orig)
-            merged.append(evolved)
+        for orig in original:
+            orig_id = orig.get("id")
+            if orig_id and orig_id in evolved_by_id:
+                merged.append(evolved_by_id[orig_id])
+            else:
+                merged.append(orig)
+
+        # 记录不匹配的进化结果
+        if len(evolution_results) != len(merged):
+            logger.warning(
+                "[supervisor] 进化结果数量 (%d) 与原假设数量 (%d) 不匹配",
+                len(evolution_results), len(original),
+            )
+
         return merged
 
     def _format_evolution_summary(self, history: List[Dict]) -> str:
