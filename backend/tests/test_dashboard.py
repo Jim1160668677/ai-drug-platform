@@ -28,7 +28,7 @@ async def test_dashboard_overview_with_data(client, auth_headers, test_project):
     csv_content = b"gene,s1,s2\nEGFR,25,22\nKRAS,15,14\nTP53,30,28\n"
     await client.post(
         "/api/v1/data/upload",
-        params={"project_id": project_id, "name": "Dash RNA", "data_type": "rna_seq"},
+        data={"project_id": project_id, "name": "Dash RNA", "data_type": "rna_seq"},
         files={"file": ("dash.csv", io.BytesIO(csv_content), "text/csv")},
         headers=auth_headers,
     )

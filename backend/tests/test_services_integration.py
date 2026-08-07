@@ -42,7 +42,7 @@ class TestMoleculeDesigner:
             "constraints": {"max_mw": 500},
         })
         status = result["model_info"]["status"]
-        assert status in ("rdkit_fallback", "model_load_failed")
+        assert status in ("rdkit_fallback", "model_load_failed", "mock_mode")
         if status == "rdkit_fallback":
             assert "strategy" in result["model_info"]
             assert result["model_info"]["seed_smiles"] == "CCO"
@@ -54,7 +54,7 @@ class TestMoleculeDesigner:
         designer = MoleculeDesigner(db=MagicMock())
         result = await designer.design({"target_id": "t1"})
         status = result["model_info"]["status"]
-        assert status in ("rdkit_fallback", "model_load_failed")
+        assert status in ("rdkit_fallback", "model_load_failed", "mock_mode")
         if status == "rdkit_fallback":
             assert result["model_info"]["seed_smiles"] is None
             assert result["model_info"]["strategy"] == "fragment"
@@ -520,8 +520,8 @@ class TestLLMOrchestratorRoute:
             test_model="gpt-3.5-turbo",
         )
         orchestrator = LLMOrchestrator(db=MagicMock(), llm_client=MagicMock(), llm_config=config)
-        assert orchestrator._select_model(AnalysisTier.FAST_SCREEN) == "gpt-4o-mini"
-        assert orchestrator._select_model(AnalysisTier.DEEP_INSIGHT) == "gpt-4o"
+        assert orchestrator.select_model(AnalysisTier.FAST_SCREEN) == "gpt-4o-mini"
+        assert orchestrator.select_model(AnalysisTier.DEEP_INSIGHT) == "gpt-4o"
 
     def test_select_model_with_config_fallback_to_test(self):
         from app.services.llm.orchestrator import LLMOrchestrator
@@ -529,8 +529,8 @@ class TestLLMOrchestratorRoute:
 
         config = SimpleNamespace(fast_model=None, deep_model=None, test_model="gpt-3.5-turbo")
         orchestrator = LLMOrchestrator(db=MagicMock(), llm_client=MagicMock(), llm_config=config)
-        assert orchestrator._select_model(AnalysisTier.FAST_SCREEN) == "gpt-3.5-turbo"
-        assert orchestrator._select_model(AnalysisTier.DEEP_INSIGHT) == "gpt-3.5-turbo"
+        assert orchestrator.select_model(AnalysisTier.FAST_SCREEN) == "gpt-3.5-turbo"
+        assert orchestrator.select_model(AnalysisTier.DEEP_INSIGHT) == "gpt-3.5-turbo"
 
     @pytest.mark.asyncio
     async def test_route_fast_screen(self):

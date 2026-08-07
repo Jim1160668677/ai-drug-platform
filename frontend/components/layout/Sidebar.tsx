@@ -10,7 +10,6 @@ import {
   Pill,
   GitBranch,
   FlaskConical,
-  MessageSquare,
   FileText,
   Shield,
   ChevronLeft,
@@ -22,6 +21,17 @@ import {
   FolderKanban,
   Share2,
   ShieldCheck,
+  KeyRound,
+  Building2,
+  Grid3x3,
+  ClipboardCheck,
+  Box,
+  Combine,
+  Microscope,
+  Filter,
+  BarChart3,
+  Beaker,
+  Sparkles,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAppStore } from '@/lib/store';
@@ -30,7 +40,8 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  roles?: string[];
+  roles?: string[]; // 职级白名单（OR 关系）
+  functionRoles?: string[]; // 职能白名单（与 roles 是 AND 关系）
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -46,16 +57,33 @@ const NAV_ITEMS: NavItem[] = [
     icon: Pill,
     roles: ['founder', 'chief', 'doctor'],
   },
+  { href: '/workbench/genome', label: '个人基因组', icon: Dna },
   { href: '/workbench/hypotheses', label: '多假设并行', icon: GitBranch },
   { href: '/workbench/experiments', label: '干湿闭环', icon: FlaskConical },
+  { href: '/workbench/validations', label: '干湿验证', icon: ClipboardCheck },
+  // 计算引擎与合成模块（新闻洞察与混合架构）
+  { href: '/workbench/structures', label: '蛋白结构', icon: Box },
+  { href: '/workbench/docking', label: '分子对接', icon: Combine },
+  { href: '/workbench/cells', label: '单细胞分析', icon: Microscope },
+  { href: '/workbench/screening', label: '双上下文筛选', icon: Filter },
+  { href: '/workbench/benchmarks', label: '基准评测', icon: BarChart3 },
+  { href: '/workbench/synthesis', label: '合成规划', icon: Beaker },
   { href: '/workbench/lineage', label: '数据血缘', icon: Share2 },
-  { href: '/workbench/chat', label: 'AI 问答', icon: MessageSquare },
+  {
+    href: '/workbench/intelligence',
+    label: '智能工作台',
+    icon: Sparkles,
+    roles: ['founder', 'chief', 'researcher', 'doctor', 'engineer'],
+  },
   { href: '/workbench/federated', label: '联邦学习', icon: Network, roles: ['founder', 'chief', 'engineer'] },
   { href: '/workbench/privacy', label: '隐私计算', icon: Lock, roles: ['founder', 'chief', 'engineer'] },
   { href: '/workbench/efficacy', label: '疗效监测', icon: Activity, roles: ['founder', 'chief', 'doctor'] },
   { href: '/workbench/consent', label: '知情同意', icon: ShieldCheck, roles: ['founder', 'chief', 'doctor'] },
+  { href: '/workbench/organizations', label: '机构管理', icon: Building2, roles: ['founder', 'chief'] },
+  { href: '/workbench/organizations/matrix', label: '职能矩阵', icon: Grid3x3 },
   { href: '/workbench/monitor', label: '系统监控', icon: Activity, roles: ['founder', 'chief', 'engineer'] },
   { href: '/reports', label: '报告中心', icon: FileText },
+  { href: '/settings/llm', label: '我的 LLM 配置', icon: KeyRound },
   {
     href: '/admin',
     label: '管理后台',
@@ -68,9 +96,12 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { sidebarCollapsed, toggleSidebar, user } = useAppStore();
   const userRole = user?.role || 'researcher';
+  const userFunction = user?.function_role || '';
 
   const visibleItems = NAV_ITEMS.filter(
-    (item) => !item.roles || item.roles.includes(userRole)
+    (item) =>
+      (!item.roles || item.roles.includes(userRole)) &&
+      (!item.functionRoles || item.functionRoles.includes(userFunction))
   );
 
   return (

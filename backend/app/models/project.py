@@ -34,6 +34,7 @@ class Project(Base, UUIDMixin, TimestampMixin):
     hypotheses: Mapped[List["Hypothesis"]] = relationship("Hypothesis", back_populates="project", cascade="all, delete-orphan")
     treatments: Mapped[List["Treatment"]] = relationship("Treatment", back_populates="project", cascade="all, delete-orphan")
     experiments: Mapped[List["Experiment"]] = relationship("Experiment", back_populates="project", cascade="all, delete-orphan")
+    failure_knowledge: Mapped[List["FailureKnowledge"]] = relationship("FailureKnowledge", back_populates="project", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Project {self.name}>"

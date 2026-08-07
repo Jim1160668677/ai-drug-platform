@@ -5,19 +5,20 @@
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.db.session import get_db
 from app.models.dataset import Dataset
 from app.models.molecule import Molecule
 from app.models.project import Project
 from app.models.target import Target
 from app.models.treatment import Treatment
+from app.models.pipeline_run import PipelineRun, PipelineRunStatus, StepStatus
 from app.models.user import User
 from app.api.v1.schemas import StandardResponse
 from app.schemas.common import ApiResponse, success_response
@@ -144,3 +145,177 @@ async def get_pipeline_status(
         "pipeline_ready": datasets_count > 0,
         "pipeline_complete": targets_count > 0 and treatments_count > 0,
     })
+
+
+@router.get(
+    "/pipeline-runs/{project_id}",
+    response_model=ApiResponse[List[Dict[str, Any]]],
+    summary="查询项目的流水线运行列表",
+)
+async def list_pipeline_runs(
+    project_id: UUID,
+    status: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100, description="返回条数上限"),
+    offset: int = Query(0, ge=0, description="偏移量"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询项目的流水线运行列表（仅返回当前用户触发的运行记录）"""
+    query = select(PipelineRun).where(
+        PipelineRun.project_id == project_id,
+        PipelineRun.triggered_by == current_user.id,
+    )
+    if status:
+        query = query.where(PipelineRun.status == status)
+    query = query.order_by(PipelineRun.started_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(query)
+    runs = result.scalars().all()
+
+    items = [
+        {
+            "id": str(r.id),
+            "project_id": str(r.project_id),
+            "status": r.status,
+            "tier": r.tier,
+            "current_step": r.current_step,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "duration_sec": r.duration_sec,
+            "error_message": r.error_message,
+        }
+        for r in runs
+    ]
+    return success_response(items)
+
+
+@router.get(
+    "/pipeline-runs/detail/{run_id}",
+    response_model=ApiResponse[Dict[str, Any]],
+    summary="查询单个流水线运行详情（含日志）",
+)
+async def get_pipeline_run_detail(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询单个流水线运行的完整详情，包含步骤状态、摘要和日志"""
+    run = await db.get(PipelineRun, run_id)
+    if not run:
+        raise NotFoundError("流水线运行记录不存在")
+    if run.triggered_by != current_user.id:
+        raise ForbiddenError("无权访问该流水线运行记录")
+
+    data = {
+        "id": str(run.id),
+        "project_id": str(run.project_id),
+        "status": run.status,
+        "tier": run.tier,
+        "max_targets": run.max_targets,
+        "molecules_per_target": run.molecules_per_target,
+        "molecule_strategy": run.molecule_strategy,
+        "skip_existing": run.skip_existing,
+        "enable_hypothesis": run.enable_hypothesis,
+        "current_step": run.current_step,
+        "steps_status": run.steps_status or {},
+        "completed_steps": run.completed_steps or [],
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_sec": run.duration_sec,
+        "summary": run.summary,
+        "error_message": run.error_message,
+        "logs": run.logs or [],
+        "triggered_by": str(run.triggered_by) if run.triggered_by else None,
+    }
+    return success_response(data)
+
+
+@router.get(
+    "/pipeline-runs/latest/{project_id}",
+    response_model=ApiResponse[Dict[str, Any]],
+    summary="查询项目最新流水线运行",
+)
+async def get_latest_pipeline_run(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询项目最新的一条流水线运行记录"""
+    query = select(PipelineRun).where(
+        PipelineRun.project_id == project_id,
+        PipelineRun.triggered_by == current_user.id,
+    ).order_by(PipelineRun.started_at.desc()).limit(1)
+    result = await db.execute(query)
+    run = result.scalar_one_or_none()
+
+    if not run:
+        raise NotFoundError("该项目暂无流水线运行记录")
+
+    data = {
+        "id": str(run.id),
+        "project_id": str(run.project_id),
+        "status": run.status,
+        "tier": run.tier,
+        "current_step": run.current_step,
+        "steps_status": run.steps_status or {},
+        "completed_steps": run.completed_steps or [],
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_sec": run.duration_sec,
+        "summary": run.summary,
+        "error_message": run.error_message,
+    }
+    return success_response(data)
+
+
+@router.post(
+    "/pipeline-runs/{run_id}/resume",
+    response_model=StandardResponse,
+    summary="从断点恢复流水线运行",
+)
+async def resume_pipeline_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """从断点恢复流水线运行
+
+    基于历史运行记录的 steps_status 推断恢复点，跳过已成功的步骤，
+    从首个未完成的步骤继续执行。
+    """
+    run = await db.get(PipelineRun, run_id)
+    if not run:
+        raise NotFoundError("流水线运行记录不存在")
+    if run.triggered_by != current_user.id:
+        raise ForbiddenError("无权操作该流水线运行记录")
+
+    terminal_statuses = {PipelineRunStatus.COMPLETED, PipelineRunStatus.CANCELLED}
+    if run.status in terminal_statuses:
+        raise ConflictError(f"流水线已处于终态 '{run.status}'，无法恢复")
+
+    resume_point = run.get_resume_point()
+    if not resume_point:
+        return StandardResponse(
+            message="流水线所有步骤已完成，无需恢复",
+            data={"run_id": str(run.id), "status": run.status, "resume_point": None},
+        )
+
+    from app.services.orchestrator.discovery_pipeline import DiscoveryPipeline
+
+    pipeline = DiscoveryPipeline(db)
+    result = await pipeline.run(
+        project_id=run.project_id,
+        dataset_id=None,
+        tier=run.tier,
+        max_targets=run.max_targets,
+        molecules_per_target=run.molecules_per_target,
+        molecule_strategy=run.molecule_strategy,
+        skip_existing=run.skip_existing,
+        current_user=current_user,
+        enable_hypothesis=run.enable_hypothesis,
+        resume_from_step=resume_point,
+    )
+
+    return StandardResponse(
+        message=f"流水线已从 '{resume_point}' 步骤恢复执行",
+        data=result,
+    )

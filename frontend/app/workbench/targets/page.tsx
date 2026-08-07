@@ -9,6 +9,8 @@ import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import ProgressBar from '@/components/ui/ProgressBar';
+import AIInsightBanner from '@/components/coscientist/AIInsightBanner';
+import ReasoningTrigger from '@/components/coscientist/ReasoningTrigger';
 
 export default function TargetsPage() {
   const { currentProject } = useAppStore();
@@ -31,6 +33,26 @@ export default function TargetsPage() {
       discoverTargets({ projectId: currentProject!.id, tier }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['targets'] });
+      setShowDiscover(false);
+      import('@/lib/notification').then(({ toast }) =>
+        toast.success('靶点发现完成', '请查看结果列表')
+      );
+    },
+    onError: (err: any) => {
+      const status = err?.response?.status;
+      const msg = err?.response?.data?.error?.message || err?.response?.data?.detail || err?.message || '请稍后重试';
+      // 404 = 项目不存在（可能 localStorage 缓存了已删除的项目）
+      if (status === 404) {
+        import('@/lib/notification').then(({ toast }) =>
+          toast.error('项目不存在', '项目可能已被删除，请刷新页面后重新选择项目')
+        );
+        // 清除过期项目引用，触发 Header 自动选择新项目
+        useAppStore.getState().setProject(null);
+      } else {
+        import('@/lib/notification').then(({ toast }) =>
+          toast.error('靶点发现失败', msg)
+        );
+      }
       setShowDiscover(false);
     },
   });
@@ -74,6 +96,8 @@ export default function TargetsPage() {
           <Search className="w-4 h-4" /> 发现靶点
         </Button>
       </div>
+
+      <AIInsightBanner entityType="target" projectId={currentProject?.id} />
 
       {(discoverMutation.isPending || repurposeMutation.isPending) && (
         <ProgressBar
@@ -157,6 +181,14 @@ export default function TargetsPage() {
                   <Button size="sm" variant="ghost" onClick={() => setDetailTarget(t)}>
                     详情
                   </Button>
+                  <ReasoningTrigger
+                    entityType="target"
+                    entityId={t.id}
+                    entityName={t.gene_symbol}
+                    projectId={currentProject?.id}
+                    reasonType="drug_repurposing"
+                    variant="icon"
+                  />
                 </div>
               </div>
             </Card>
@@ -184,44 +216,67 @@ export default function TargetsPage() {
               </button>
             </div>
             <div className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">分析层级</label>
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 p-3 border rounded-md cursor-pointer hover:bg-gray-50">
-                    <input
-                      type="radio"
-                      name="tier"
-                      value="fast_screen"
-                      checked={tier === 'fast_screen'}
-                      onChange={(e) => setTier(e.target.value)}
-                    />
-                    <div>
-                      <div className="text-sm font-medium">快速筛查 (fast_screen)</div>
-                      <div className="text-xs text-gray-500">&lt;$5 / &lt;5min — 统计分析+规则引擎</div>
-                    </div>
-                  </label>
-                  <label className="flex items-center gap-2 p-3 border rounded-md cursor-pointer hover:bg-gray-50">
-                    <input
-                      type="radio"
-                      name="tier"
-                      value="deep_insight"
-                      checked={tier === 'deep_insight'}
-                      onChange={(e) => setTier(e.target.value)}
-                    />
-                    <div>
-                      <div className="text-sm font-medium">深度洞察 (deep_insight)</div>
-                      <div className="text-xs text-gray-500">&lt;$20 / &lt;30min — LLM+RAG+网络分析</div>
-                    </div>
-                  </label>
+              {/* 当前项目信息 */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <Dna className="w-4 h-4 text-blue-600" />
+                  <span className="text-blue-900 font-medium">当前项目：</span>
+                  <span className="text-blue-800">{currentProject?.name || '未选择'}</span>
                 </div>
+                {currentProject?.cancer_type && (
+                  <div className="text-xs text-blue-600 mt-1 ml-6">
+                    癌型：{currentProject.cancer_type}
+                    {currentProject.stage && ` · 分期 ${currentProject.stage}`}
+                  </div>
+                )}
               </div>
-              <Button
-                className="w-full"
-                loading={discoverMutation.isPending}
-                onClick={() => discoverMutation.mutate()}
-              >
-                开始发现
-              </Button>
+
+              {!currentProject ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center text-sm text-yellow-800">
+                  请先在顶部选择一个项目，然后再进行靶点发现
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">分析层级</label>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 p-3 border rounded-md cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="tier"
+                          value="fast_screen"
+                          checked={tier === 'fast_screen'}
+                          onChange={(e) => setTier(e.target.value)}
+                        />
+                        <div>
+                          <div className="text-sm font-medium">快速筛查 (fast_screen)</div>
+                          <div className="text-xs text-gray-500">&lt;$5 / &lt;5min — 统计分析+规则引擎</div>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-2 p-3 border rounded-md cursor-pointer hover:bg-gray-50">
+                        <input
+                          type="radio"
+                          name="tier"
+                          value="deep_insight"
+                          checked={tier === 'deep_insight'}
+                          onChange={(e) => setTier(e.target.value)}
+                        />
+                        <div>
+                          <div className="text-sm font-medium">深度洞察 (deep_insight)</div>
+                          <div className="text-xs text-gray-500">&lt;$20 / &lt;30min — LLM+RAG+网络分析</div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                  <Button
+                    className="w-full"
+                    loading={discoverMutation.isPending}
+                    onClick={() => discoverMutation.mutate()}
+                  >
+                    开始发现
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </div>

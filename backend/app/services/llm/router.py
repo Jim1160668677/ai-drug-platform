@@ -201,6 +201,145 @@ class LLMRouter:
 
         return result
 
+    async def stream_complete(
+        self,
+        prompt: str,
+        tier: str = AnalysisTier.FAST_SCREEN,
+        system: Optional[str] = None,
+        bypass_guardrail: bool = False,
+    ):
+        """流式主路由入口 — 逐 token yield
+
+        让 Agent 引擎能在 LLM 生成时就推送 token 到前端，显著降低首字延迟。
+
+        流程：
+        1. 输入护栏检查（同步）
+        2. 调用 LLM stream_chat
+        3. 逐 token yield 给调用方
+        4. 完成后输出护栏检查（仅对完整内容做检查，若被拦截则追加提示）
+        5. 成本追踪
+
+        Yields:
+            {"type": "token", "content": "..."} — 增量 token
+            {"type": "done", "content": "...", "model": "...", "usage": {...},
+             "guardrail": {...}, "cost_usd": float} — 完整响应结束
+            {"type": "error", "content": "..."} — 错误信息
+        """
+        import time as _time
+
+        start = _time.time()
+        model = self.select_model(tier)
+        guardrail_result = GuardrailResult(passed=True)
+
+        # 1. 输入护栏检查
+        if not bypass_guardrail:
+            guardrail_result = self.guardrail.check_input(prompt)
+            if guardrail_result.blocked:
+                logger.warning(
+                    f"LLMRouter.stream_complete 输入被护栏拦截: {guardrail_result.reasons}"
+                )
+                yield {
+                    "type": "error",
+                    "content": f"输入被安全护栏拦截：{', '.join(guardrail_result.reasons)}",
+                    "blocked": True,
+                }
+                return
+            effective_prompt = guardrail_result.sanitized_text or prompt
+        else:
+            effective_prompt = prompt
+
+        # 2. 构造 messages
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": effective_prompt})
+
+        # 3. 流式调用 LLM
+        full_content: str = ""
+        usage: Dict[str, Any] = {}
+        final_model = model
+        has_stream = hasattr(self.llm_client, "stream_chat")
+
+        if has_stream:
+            try:
+                async for chunk in self.llm_client.stream_chat(
+                    messages, model=model
+                ):
+                    chunk_type = chunk.get("type")
+                    if chunk_type == "token":
+                        token = chunk.get("content", "")
+                        if token:
+                            full_content += token
+                            yield {"type": "token", "content": token}
+                    elif chunk_type == "done":
+                        full_content = chunk.get("content", "") or full_content
+                        usage = chunk.get("usage", {}) or {}
+                        final_model = chunk.get("model", model)
+                    elif chunk_type == "error":
+                        yield {
+                            "type": "error",
+                            "content": chunk.get("content", "LLM 流式调用失败"),
+                        }
+                        return
+            except Exception as e:
+                logger.error(f"LLM stream 调用失败: {e}", exc_info=True)
+                yield {
+                    "type": "error",
+                    "content": f"LLM stream 调用失败: {e}",
+                }
+                return
+        else:
+            # 客户端不支持流式：回退到非流式调用，整段作为单 token
+            try:
+                response = await self.llm_client.chat(messages, model=model)
+                full_content = response.get("content", "")
+                usage = response.get("usage", {}) or {}
+                final_model = response.get("model", model)
+                if full_content:
+                    yield {"type": "token", "content": full_content}
+            except Exception as e:
+                logger.error(f"LLM 非流式调用失败: {e}", exc_info=True)
+                yield {
+                    "type": "error",
+                    "content": f"LLM 调用失败: {e}",
+                }
+                return
+
+        # 4. 输出护栏检查（对完整内容）
+        if not bypass_guardrail:
+            output_check = self.guardrail.check_output(full_content)
+            if output_check.blocked:
+                logger.warning(
+                    f"LLMRouter.stream_complete 输出被护栏拦截: {output_check.reasons}"
+                )
+                # 用拦截提示替换内容
+                full_content = (
+                    f"输出被安全护栏拦截：{', '.join(output_check.reasons)}\n\n"
+                    + full_content
+                )
+            elif output_check.annotations:
+                full_content += "\n\n" + "\n".join(output_check.annotations)
+
+        # 5. 成本追踪
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        cost_usd = 0.0
+        if self.cost_tracker.can_spend(0.01):
+            cost_usd = self.cost_tracker.record(
+                final_model, prompt_tokens, completion_tokens
+            )
+
+        duration_sec = round(_time.time() - start, 3)
+        yield {
+            "type": "done",
+            "content": full_content,
+            "model": final_model,
+            "usage": usage,
+            "guardrail": _guardrail_to_dict(guardrail_result),
+            "cost_usd": cost_usd,
+            "duration_sec": duration_sec,
+        }
+
 
 def _guardrail_to_dict(result: GuardrailResult) -> Dict[str, Any]:
     """GuardrailResult → dict"""

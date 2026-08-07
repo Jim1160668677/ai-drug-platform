@@ -463,9 +463,9 @@ class TestExceptionHandlers:
 
     @pytest.mark.asyncio
     async def test_request_validation_error(self, client):
-        """Pydantic 422 应转为 400 VALIDATION_ERROR 信封"""
+        """Pydantic 校验错误应转为 422 VALIDATION_ERROR 信封（BUG-003 统一返回 422）"""
         resp = await client.get("/validation_error_endpoint", params={"q": "not_an_int"})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         body = resp.json()
         assert body["error"]["code"] == "VALIDATION_ERROR"
         # details 应包含字段错误

@@ -27,6 +27,7 @@ class Molecule(Base, UUIDMixin, TimestampMixin):
     # 关联
     target = relationship("Target", back_populates="molecules")
     experiments: Mapped[List["Experiment"]] = relationship("Experiment", back_populates="molecule")
+    failure_knowledge: Mapped[List["FailureKnowledge"]] = relationship("FailureKnowledge", back_populates="molecule")
     docking_results: Mapped[List["DockingResult"]] = relationship(
         "DockingResult", back_populates="molecule", cascade="all, delete-orphan"
     )

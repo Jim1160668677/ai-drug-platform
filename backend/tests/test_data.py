@@ -11,7 +11,7 @@ async def test_upload_csv(client, auth_headers, test_project):
 
     resp = await client.post(
         "/api/v1/data/upload",
-        params={"project_id": project_id, "name": "Test RNA-seq", "data_type": "rna_seq", "source": "test"},
+        data={"project_id": project_id, "name": "Test RNA-seq", "data_type": "rna_seq", "source": "test"},
         files={"file": ("test.csv", io.BytesIO(csv_content), "text/csv")},
         headers=auth_headers,
     )
@@ -49,7 +49,7 @@ async def test_parse_dataset(client, auth_headers, test_project):
     # 上传
     upload_resp = await client.post(
         "/api/v1/data/upload",
-        params={"project_id": project_id, "name": "Parse Test", "data_type": "rna_seq"},
+        data={"project_id": project_id, "name": "Parse Test", "data_type": "rna_seq"},
         files={"file": ("parse.csv", io.BytesIO(csv_content), "text/csv")},
         headers=auth_headers,
     )
@@ -74,7 +74,7 @@ async def test_quality_report(client, auth_headers, test_project):
 
     upload_resp = await client.post(
         "/api/v1/data/upload",
-        params={"project_id": project_id, "name": "Quality Test", "data_type": "rna_seq"},
+        data={"project_id": project_id, "name": "Quality Test", "data_type": "rna_seq"},
         files={"file": ("quality.csv", io.BytesIO(csv_content), "text/csv")},
         headers=auth_headers,
     )

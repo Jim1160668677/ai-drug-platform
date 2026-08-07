@@ -30,10 +30,17 @@ async def list_projects(
 
     可见性：领导角色（FOUNDER / CHIEF_RESEARCHER）可见全部项目；
     其余角色仅可见自己拥有的项目。
+    已归档项目默认不显示。
     """
     skip = (page - 1) * page_size
-    stmt = select(Project).offset(skip).limit(page_size).order_by(Project.created_at.desc())
-    count_stmt = select(func.count()).select_from(Project)
+    stmt = (
+        select(Project)
+        .where(Project.status != ProjectStatus.ARCHIVED)
+        .offset(skip)
+        .limit(page_size)
+        .order_by(Project.created_at.desc())
+    )
+    count_stmt = select(func.count()).select_from(Project).where(Project.status != ProjectStatus.ARCHIVED)
     if not is_leadership_role(current_user.role):
         stmt = stmt.where(Project.owner_id == current_user.id)
         count_stmt = count_stmt.where(Project.owner_id == current_user.id)

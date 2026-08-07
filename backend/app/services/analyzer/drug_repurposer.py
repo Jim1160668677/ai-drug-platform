@@ -107,7 +107,12 @@ class DrugRepurposer:
         score = 0.0
 
         # 已获批（max_phase=4）加 40 分
-        max_phase = drug.get("max_phase", 0) or 0
+        # ChEMBL API 返回的 max_phase_for_ind 可能是字符串（如 "4"），需类型转换
+        # 否则 min(40, "4" * 10) 会触发 str vs int 比较错误
+        try:
+            max_phase = int(drug.get("max_phase", 0) or 0)
+        except (TypeError, ValueError):
+            max_phase = 0
         score += min(40, max_phase * 10)
 
         # 类药性（通过 Lipinski 加 30 分）
@@ -122,7 +127,11 @@ class DrugRepurposer:
             score += 20
 
         # 分子量合理范围加 10 分
-        mw = properties.get("mw") or drug.get("molecular_weight") or 0
+        # molecular_weight 可能是字符串或 None，需类型转换
+        try:
+            mw = float(properties.get("mw") or drug.get("molecular_weight") or 0)
+        except (TypeError, ValueError):
+            mw = 0.0
         if 200 <= mw <= 600:
             score += 10
 

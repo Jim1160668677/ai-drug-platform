@@ -37,6 +37,7 @@ class Target(Base, UUIDMixin, TimestampMixin):
     project = relationship("Project", back_populates="targets")
     molecules: Mapped[List["Molecule"]] = relationship("Molecule", back_populates="target")
     experiments: Mapped[List["Experiment"]] = relationship("Experiment", back_populates="target")
+    failure_knowledge: Mapped[List["FailureKnowledge"]] = relationship("FailureKnowledge", back_populates="target")
 
     def __repr__(self) -> str:
         return f"<Target {self.gene_symbol} (Grade {self.evidence_grade})>"

@@ -1,5 +1,6 @@
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
+import ScientistCopilot from '@/components/coscientist/ScientistCopilot';
 
 export default function WorkbenchLayout({
   children,
@@ -13,6 +14,8 @@ export default function WorkbenchLayout({
         <Header />
         <main className="flex-1 overflow-y-auto bg-gray-50 p-6">{children}</main>
       </div>
+      {/* 伴随式科学推理助手（全局浮窗，嵌入工作流） */}
+      <ScientistCopilot />
     </div>
   );
 }

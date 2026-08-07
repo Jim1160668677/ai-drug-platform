@@ -45,7 +45,7 @@ _PII_PATTERNS = {
     "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
     "phone": r"\b1[3-9]\d{9}\b",
     "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
-    "id_card": r"\b\d{15}|\d{18}\b",
+    "id_card": r"\b(?:\d{15}|\d{18})\b",
 }
 
 # 角色扮演越狱模式
@@ -227,8 +227,8 @@ class Guardrail:
         medical_redlines_enabled: Optional[bool] = None,
     ):
         self.enabled = enabled if enabled is not None else settings.GUARDRAIL_ENABLED
-        self.max_dose_mg = max_dose_mg or settings.GUARDRAIL_MAX_DOSE_MG
-        custom_patterns = block_patterns or settings.GUARDRAIL_BLOCK_PATTERNS
+        self.max_dose_mg = max_dose_mg if max_dose_mg is not None else settings.GUARDRAIL_MAX_DOSE_MG
+        custom_patterns = block_patterns if block_patterns is not None else settings.GUARDRAIL_BLOCK_PATTERNS
         custom_list = [p.strip() for p in custom_patterns.split(",") if p.strip()]
         self._absolute_patterns = _compile_patterns(_ABSOLUTE_PATTERNS + custom_list)
         self._pii_patterns = {k: re.compile(v) for k, v in _PII_PATTERNS.items()}

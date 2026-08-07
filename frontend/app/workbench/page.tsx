@@ -72,22 +72,48 @@ export default function WorkbenchHome() {
   const recentExperiments = (experiments || []).slice(0, 5);
 
   const pipelineMutation = useMutation({
-    mutationFn: (pid: string) => runPipeline({ project_id: pid }),
+    mutationFn: (payload: Parameters<typeof runPipeline>[0]) => runPipeline(payload),
     onSuccess: (data) => {
       const summary = data.summary || {};
-      showNotification({
-        type: 'success',
-        message: `流水线完成：靶点 ${summary.total_targets || 0}，分子 ${summary.total_molecules || 0}，方案 ${summary.total_treatments || 0}`,
-      });
+      const total = (summary.total_targets || 0) + (summary.total_molecules || 0) + (summary.total_treatments || 0);
+      // 无结果时给出可操作提示，而非笼统的"完成"
+      if (total === 0 && (datasets?.length || 0) === 0) {
+        showNotification({
+          type: 'warning',
+          message: '流水线未产出结果：当前项目无数据集。请先上传数据后再运行。',
+        });
+      } else {
+        showNotification({
+          type: total === 0 ? 'warning' : 'success',
+          message: `流水线完成：靶点 ${summary.total_targets || 0}，分子 ${summary.total_molecules || 0}，方案 ${summary.total_treatments || 0}`,
+        });
+      }
       setPipelineResult(data);
       queryClient.invalidateQueries({ queryKey: ['targets'] });
       queryClient.invalidateQueries({ queryKey: ['molecules'] });
       queryClient.invalidateQueries({ queryKey: ['treatments'] });
     },
-    onError: () => {
-      showNotification({ type: 'error', message: '流水线执行失败' });
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string };
+      showNotification({
+        type: 'error',
+        message: e?.response?.data?.detail || e?.message || '流水线执行失败',
+      });
     },
   });
+
+  const handleRunPipeline = (resumeFromStep?: string) => {
+    if (!projectId) return;
+    pipelineMutation.mutate({
+      project_id: projectId,
+      tier: 'fast_screen',
+      max_targets: 5,
+      molecules_per_target: 10,
+      enable_hypothesis: true,
+      hypothesis_config: { use_llm: false, mode: 'rule', max_hypotheses: 3 },
+      resume_from_step: resumeFromStep as any,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -163,13 +189,20 @@ export default function WorkbenchHome() {
           <Button
             className="w-full"
             disabled={!projectId || pipelineMutation.isPending}
-            onClick={() => projectId && pipelineMutation.mutate(projectId)}
+            onClick={() => handleRunPipeline()}
           >
             <Zap className="w-4 h-4" />
             {pipelineMutation.isPending ? '流水线运行中...' : '一键流水线（靶点→分子→治疗方案）'}
           </Button>
           {!projectId && (
             <p className="text-xs text-gray-400 mt-2 text-center">请先选择项目</p>
+          )}
+          {projectId && (datasets?.length || 0) === 0 && (
+            <p className="text-xs text-amber-600 mt-2 text-center flex items-center justify-center gap-1">
+              <AlertCircle className="w-3 h-3" />
+              当前项目无数据集，流水线将无法发现靶点。请先
+              <Link href="/workbench/data" prefetch={false} className="underline">上传数据</Link>
+            </p>
           )}
         </div>
       </Card>
@@ -203,26 +236,46 @@ export default function WorkbenchHome() {
             </div>
             {pipelineResult.steps && (
               <div className="space-y-1 mt-3">
-                {Object.entries(pipelineResult.steps).map(([key, step]: [string, any]) => (
-                  <div key={key} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">
-                      {key === 'target_discovery' ? '靶点发现' :
-                       key === 'molecule_generation' ? '分子生成' :
-                       key === 'treatment_matching' ? '治疗方案' : key}
-                    </span>
-                    <Badge
-                      variant={
-                        step.status === 'success' ? 'green' :
-                        step.status === 'partial' ? 'yellow' :
-                        step.status === 'failed' ? 'red' : 'gray'
-                      }
-                    >
-                      {step.status === 'success' ? '成功' :
-                       step.status === 'partial' ? '部分成功' :
-                       step.status === 'failed' ? '失败' : '已跳过'}
-                    </Badge>
-                  </div>
-                ))}
+                {Object.entries(pipelineResult.steps).map(([key, step]: [string, any]) => {
+                  const labelMap: Record<string, string> = {
+                    target_discovery: '靶点发现',
+                    molecule_generation: '分子生成',
+                    treatment_matching: '治疗方案',
+                    hypothesis_generation: '假设生成',
+                  };
+                  const errMsg = step.error || (step.errors && step.errors.length > 0 ? step.errors.join('; ') : null);
+                  const isFailed = step.status === 'failed';
+                  return (
+                    <div key={key}>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-600">{labelMap[key] || key}</span>
+                        <Badge
+                          variant={
+                            step.status === 'success' ? 'green' :
+                            step.status === 'partial' ? 'yellow' :
+                            step.status === 'failed' ? 'red' : 'gray'
+                          }
+                        >
+                          {step.status === 'success' ? '成功' :
+                           step.status === 'partial' ? '部分成功' :
+                           step.status === 'failed' ? '失败' : '已跳过'}
+                        </Badge>
+                      </div>
+                      {errMsg && (
+                        <div className="text-xs text-red-500 mt-0.5 ml-2 break-all">⚠ {errMsg}</div>
+                      )}
+                      {isFailed && (
+                        <button
+                          onClick={() => handleRunPipeline(key)}
+                          disabled={pipelineMutation.isPending}
+                          className="text-xs text-primary-600 underline mt-0.5 ml-2 disabled:opacity-50"
+                        >
+                          从此步骤重试
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

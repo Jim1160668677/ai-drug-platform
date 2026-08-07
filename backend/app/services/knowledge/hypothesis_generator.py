@@ -13,7 +13,11 @@
 - 混合模式（hybrid）：规则 + LLM 合并去重
 - 置信度计算：基于证据数量和强度
 - 验证方法建议：实验验证/临床回顾/计算模拟
+
+并行处理：规则生成与 LLM 生成使用 asyncio.gather 并行执行，
+配合 Semaphore 限制 LLM 并发数，避免资源竞争。
 """
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -22,6 +26,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# LLM 并发上限 — 避免同时发起过多请求导致限流或资源竞争
+_LLM_CONCURRENCY_LIMIT = 3
 
 
 class HypothesisGenerator:
@@ -39,7 +46,7 @@ class HypothesisGenerator:
         llm_client: Any = None,
         mode: str = "hybrid",
     ) -> List[Dict[str, Any]]:
-        """自动生成研究假设
+        """自动生成研究假设（规则与 LLM 并行执行）
 
         Args:
             project_id: 项目 ID
@@ -59,20 +66,44 @@ class HypothesisGenerator:
         rule_hypotheses: List[Dict[str, Any]] = []
         llm_hypotheses: List[Dict[str, Any]] = []
 
-        # 规则生成（rule 或 hybrid 模式）
-        if mode in ("rule", "hybrid") or not use_llm:
-            rule_hypotheses = self._generate_by_rules(evidence, project_id)
+        # 决定是否需要规则生成和 LLM 生成
+        need_rules = mode in ("rule", "hybrid") or not use_llm
+        need_llm = use_llm and mode in ("llm", "hybrid") and llm_client is not None
 
-        # LLM 生成（llm 或 hybrid 模式，且 use_llm=True）
-        if use_llm and mode in ("llm", "hybrid") and llm_client is not None:
+        # 并行执行规则生成和 LLM 生成
+        # 规则生成是同步的（CPU 密集），用 to_thread 包装避免阻塞事件循环
+        # LLM 生成是异步的（I/O 密集），直接 await
+        tasks = []
+        if need_rules:
+            tasks.append(("rule", asyncio.to_thread(self._generate_by_rules, evidence, project_id)))
+        if need_llm:
+            tasks.append(("llm", self._llm_assisted_generate(
+                evidence, project_id, llm_client, max_hypotheses
+            )))
+
+        if tasks:
+            results = await asyncio.gather(
+                *[t[1] for t in tasks],
+                return_exceptions=True,
+            )
+            for (task_name, _), result in zip(tasks, results):
+                if isinstance(result, Exception):
+                    if task_name == "llm":
+                        logger.warning(f"LLM 假设生成失败，降级规则模式: {result}")
+                    else:
+                        logger.error(f"规则假设生成失败: {result}")
+                else:
+                    if task_name == "rule":
+                        rule_hypotheses = result
+                    else:
+                        llm_hypotheses = result
+
+        # 如果 LLM 失败且规则也空，尝试规则兜底
+        if not rule_hypotheses and not llm_hypotheses and need_rules:
             try:
-                llm_hypotheses = await self._llm_assisted_generate(
-                    evidence, project_id, llm_client, max_hypotheses
-                )
+                rule_hypotheses = self._generate_by_rules(evidence, project_id)
             except Exception as e:
-                logger.warning(f"LLM 假设生成失败，降级规则模式: {e}")
-                if not rule_hypotheses:
-                    rule_hypotheses = self._generate_by_rules(evidence, project_id)
+                logger.error(f"规则兜底生成失败: {e}")
 
         # 合并假设
         if mode == "hybrid" and llm_hypotheses:
@@ -161,12 +192,13 @@ class HypothesisGenerator:
 [{{"title": "...", "description": "...", "supporting_evidence": ["..."], "verification_method": "...", "confidence": 0.8, "category": "target_mechanism"}}]
 """
 
-        # 调用 LLM
+        # 调用 LLM — 不指定 model，让 FallbackLLMClient 使用其配置的默认模型
+        # （agnes-2.5-flash 主模型 → agnes-2.0-flash 备用 → 智谱 GLM 第三级）
         try:
+            response = None
             if hasattr(llm_client, "chat"):
                 response = await llm_client.chat(
                     messages=[{"role": "user", "content": prompt}],
-                    model="agnes-2.0-flash",
                 )
             elif hasattr(llm_client, "complete"):
                 response = await llm_client.complete(prompt)
@@ -177,8 +209,16 @@ class HypothesisGenerator:
             logger.warning(f"LLM 调用失败: {e}")
             return []
 
-        # 解析 LLM 返回
-        content = response if isinstance(response, str) else str(response)
+        # 解析 LLM 返回 — 兼容多种客户端返回格式
+        # RealLLMClient.chat() 返回 dict {"content": "...", ...}
+        # LLMRouter.complete() 返回 dict {"content": "...", ...}
+        # MockLLMClient 可能返回 str
+        if isinstance(response, dict):
+            content = response.get("content", "") or ""
+        elif isinstance(response, str):
+            content = response
+        else:
+            content = str(response)
         # 去除可能的 markdown 代码块标记
         content = content.strip()
         if content.startswith("```"):
@@ -292,7 +332,16 @@ class HypothesisGenerator:
         project_id: str,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """收集各模块的分析结果作为假设生成证据"""
+        """收集各模块的分析结果作为假设生成证据（并行查询数据库）"""
+        # 修复：将 project_id str 转为 UUID 对象，避免 Uuid(as_uuid=True) 列处理器报
+        # AttributeError: 'str' object has no attribute 'hex'，导致所有 _fetch_*
+        # 静默返回空列表，LLM 拿到"暂无充分分析数据"误导输入。
+        from uuid import UUID
+        try:
+            project_uuid = UUID(str(project_id)) if not isinstance(project_id, UUID) else project_id
+        except (ValueError, TypeError):
+            project_uuid = project_id  # 保留原值，让下游 try/except 记录真实错误
+
         evidence: Dict[str, Any] = {
             "de_genes": context.get("de_genes", []),
             "pathways": context.get("pathways", []),
@@ -304,25 +353,34 @@ class HypothesisGenerator:
             "project_id": project_id,
         }
 
-        # 尝试从数据库补充数据（如果 context 中没有提供）
+        # 并行查询数据库补充缺失的证据（避免顺序查询的延迟叠加）
+        fetch_tasks = {}
         if not evidence["de_genes"]:
-            evidence["de_genes"] = await self._fetch_de_genes(project_id)
-
+            fetch_tasks["de_genes"] = self._fetch_de_genes(project_uuid)
         if not evidence["molecules"]:
-            evidence["molecules"] = await self._fetch_molecules(project_id)
-
+            fetch_tasks["molecules"] = self._fetch_molecules(project_uuid)
         if not evidence["targets"]:
-            evidence["targets"] = await self._fetch_targets(project_id)
-
+            fetch_tasks["targets"] = self._fetch_targets(project_uuid)
         if not evidence["treatments"]:
-            evidence["treatments"] = await self._fetch_treatments(project_id)
-
+            fetch_tasks["treatments"] = self._fetch_treatments(project_uuid)
         if not evidence["clinical_feedbacks"]:
-            evidence["clinical_feedbacks"] = await self._fetch_clinical_feedbacks(project_id)
+            fetch_tasks["clinical_feedbacks"] = self._fetch_clinical_feedbacks(project_uuid)
+
+        if fetch_tasks:
+            keys = list(fetch_tasks.keys())
+            results = await asyncio.gather(
+                *[fetch_tasks[k] for k in keys],
+                return_exceptions=True,
+            )
+            for key, result in zip(keys, results):
+                if not isinstance(result, Exception):
+                    evidence[key] = result
+                else:
+                    logger.debug(f"并行获取 {key} 失败: {result}")
 
         # 从数据集解析结果中提取通路富集和聚类信息
         if not evidence["pathways"] or not evidence["clusters"]:
-            await self._fetch_dataset_analysis(project_id, evidence)
+            await self._fetch_dataset_analysis(project_uuid, evidence)
 
         return evidence
 
@@ -420,7 +478,12 @@ class HypothesisGenerator:
             logger.debug(f"获取数据集分析结果失败（可忽略）: {e}")
 
     async def _fetch_de_genes(self, project_id: str) -> List[Dict[str, Any]]:
-        """从数据库获取差异表达基因"""
+        """从数据库获取差异表达基因
+
+        修复 NoneType bug：当 parsed_summary 中的 analysis_results / de / genes
+        键存在但值为 None 时，原代码直接 .get() 会抛 'NoneType' has no attribute 'get'。
+        现在使用 `or {}` / `or []` 防御 None。
+        """
         try:
             from app.models.dataset import Dataset
             result = await self.db.execute(
@@ -432,9 +495,16 @@ class HypothesisGenerator:
             de_genes = []
             for ds in datasets:
                 summary = ds.parsed_summary or {}
-                analysis = summary.get("analysis_results", {})
-                de_result = analysis.get("de", {})
-                genes = de_result.get("genes", [])
+                # 防御：键存在但值为 None 的情况
+                analysis = summary.get("analysis_results") or {}
+                if not isinstance(analysis, dict):
+                    continue
+                de_result = analysis.get("de") or {}
+                if not isinstance(de_result, dict):
+                    continue
+                genes = de_result.get("genes") or []
+                if not isinstance(genes, list):
+                    continue
                 for g in genes[:20]:  # 每个数据集取前20个
                     de_genes.append(g)
             return de_genes

@@ -40,7 +40,7 @@ export default function UserListCard() {
     },
   });
 
-  const users = (data as any)?.items || [];
+  const users = ((data as any)?.data ?? (data as any)?.items) || [];
   const total = (data as any)?.total || 0;
 
   const roleMutation = useMutation({

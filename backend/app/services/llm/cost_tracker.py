@@ -25,6 +25,7 @@ _MODEL_PRICING: Dict[str, tuple] = {
     "claude-3-haiku": (0.25, 1.25),
     "agnes-2.0-flash": (0.50, 1.50),
     "agnes-2.0-pro": (2.0, 6.0),
+    "glm-4.7-flash": (0.0, 0.0),  # 智谱免费模型
 }
 
 

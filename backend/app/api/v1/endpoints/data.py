@@ -3,10 +3,11 @@ import asyncio
 import logging
 import os
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Query, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,7 @@ from app.models.dataset import Dataset, DataType, ParseStatus
 from app.models.user import User
 from app.api.v1.schemas import DatasetResponse, StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
+from app.services.coscientist.hooks import on_data_parsed
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -79,11 +81,11 @@ async def list_datasets(
 
 @router.post("/upload", response_model=DatasetResponse, summary="上传数据文件")
 async def upload_data(
-    project_id: UUID,
-    name: str,
-    data_type: str,
-    source: str = "",
-    file: UploadFile = File(...),
+    project_id: UUID = Form(..., description="项目 ID"),
+    name: str = Form(..., description="数据集名称", max_length=200),
+    data_type: str = Form(..., description="数据类型（如 rna_seq/wes/fasta）", max_length=64),
+    source: str = Form("", description="数据来源", max_length=200),
+    file: UploadFile = File(..., description="数据文件"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -94,6 +96,9 @@ async def upload_data(
     - 扩展名白名单校验（ALLOWED_EXTENSIONS）
     - 文件名取 basename 防路径遍历，二次校验最终路径在上传目录内
     - 文件写入使用 asyncio.to_thread 避免阻塞事件循环
+
+    修复 BUG-001：原签名未声明 Form()，FastAPI 在含 File() 的端点中
+    将普通参数解析为 Query，导致 multipart 客户端上传元数据失败。
     """
     content = await file.read()
     file_size = len(content)
@@ -190,6 +195,13 @@ async def parse_dataset(
         dataset.parse_status = ParseStatus.COMPLETED
         dataset.parsed_summary = result.get("summary")
         dataset.quality_metrics = result.get("quality_metrics")
+
+        # Co-Scientist auto-trigger hook
+        await on_data_parsed(
+            db=db, user=current_user, project_id=str(dataset.project_id) if dataset.project_id else None,
+            dataset_id=str(dataset.id), dataset_name=dataset.name if hasattr(dataset, 'name') else None,
+        )
+
         return StandardResponse(message="解析完成", data=result)
     except Exception as e:
         logger.error(f"数据集 {dataset_id} 解析失败: {e}", exc_info=True)
@@ -358,6 +370,205 @@ async def analyze_dataset(
     else:
         raise ValidationError(f"未知分析类型: {analysis_type}")
     return success_response({"dataset_id": str(dataset_id), "analysis_type": analysis_type, "result": result})
+
+
+@router.post("/analysis/full-report", response_model=ApiResponse[Dict[str, Any]], summary="生成专业数据分析报告")
+async def generate_full_report(
+    dataset_id: UUID = Body(..., embed=True, description="数据集 ID"),
+    use_llm: bool = Body(True, embed=True, description="是否使用 LLM 生成报告摘要"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """生成专业数据分析报告 — 一键运行全部生信分析 + LLM 解读
+
+    自动执行 4 类分析（差异表达/聚类/通路富集/PCA），收集所有图表，
+    并可选调用 LLM 生成专业解读报告。即使部分分析失败，仍返回已成功的结果。
+
+    返回结构：
+    - analyses: 各分析类型的结果 + ChartSpec
+    - charts: 所有图表配置（前端可直接渲染）
+    - llm_summary: LLM 生成的专业解读（可选）
+    - errors: 失败的分析列表（不影响整体）
+    """
+    import asyncio
+    import logging as _logging
+    from app.services.analyzer.bio_analyzer import BioAnalyzer
+    from app.core.config import settings
+
+    _logger = _logging.getLogger(__name__)
+
+    dataset = await db.get(Dataset, dataset_id)
+    if not dataset:
+        raise NotFoundError("数据集不存在")
+
+    summary = dataset.parsed_summary or {}
+    expression_data = summary.get("expression_data") or {}
+    use_mock = settings.USE_MOCK or not expression_data
+    if use_mock and not settings.USE_MOCK:
+        _logger.info(f"数据集 {dataset_id} 无 expression_data，降级到 Mock 模式")
+
+    analyzer = BioAnalyzer(use_mock=use_mock)
+
+    # 从工具模块复用数据提取 + 图表转换逻辑
+    from app.services.agent.tools.data_analysis import (
+        _extract_expression_data,
+        _extract_gene_list,
+        _extract_groups,
+        _to_chart_spec,
+    )
+
+    expression_data = _extract_expression_data(dataset)
+    gene_list = _extract_gene_list(dataset)
+    group_a, group_b = _extract_groups(dataset)
+    if not gene_list:
+        gene_list = [f"GENE{i:04d}" for i in range(50)]
+
+    charts: List[Dict[str, Any]] = []
+    analyses: Dict[str, Any] = {}
+    errors: List[str] = []
+
+    # 1. 差异表达分析
+    try:
+        de_result = await analyzer.differential_expression(
+            expression_data, group_a, group_b, fdr_threshold=0.05
+        )
+        de_chart = _to_chart_spec(de_result.get("plot_data", {}), "differential", dataset.name or "")
+        analyses["differential"] = {
+            "summary": de_result.get("summary", {}),
+            "parameters": de_result.get("parameters", {}),
+            "chart": de_chart,
+        }
+        if de_chart:
+            charts.append(de_chart)
+    except Exception as e:
+        _logger.warning(f"差异表达分析失败: {e}")
+        errors.append(f"差异表达分析: {e}")
+
+    # 2. 聚类分析
+    try:
+        cl_result = await analyzer.clustering(expression_data, method="kmeans", n_clusters=5)
+        cl_chart = _to_chart_spec(cl_result.get("plot_data", {}), "clustering", dataset.name or "")
+        analyses["clustering"] = {
+            "summary": {"n_clusters": cl_result.get("n_clusters", 0), "clusters": len(cl_result.get("clusters", []))},
+            "parameters": cl_result.get("parameters", {}),
+            "chart": cl_chart,
+        }
+        if cl_chart:
+            charts.append(cl_chart)
+    except Exception as e:
+        _logger.warning(f"聚类分析失败: {e}")
+        errors.append(f"聚类分析: {e}")
+
+    # 3. 通路富集
+    try:
+        pw_result = await analyzer.pathway_enrichment(gene_list, source="kegg")
+        pw_chart = _to_chart_spec(pw_result.get("plot_data", {}), "pathway", dataset.name or "")
+        analyses["pathway"] = {
+            "summary": {"pathways_found": len(pw_result.get("pathways", []))},
+            "parameters": pw_result.get("parameters", {}),
+            "chart": pw_chart,
+            "pathways": pw_result.get("pathways", [])[:10],
+        }
+        if pw_chart:
+            charts.append(pw_chart)
+    except Exception as e:
+        _logger.warning(f"通路富集失败: {e}")
+        errors.append(f"通路富集: {e}")
+
+    # 4. PCA
+    try:
+        pca_result = await analyzer.pca_analysis(expression_data, n_components=2)
+        pca_chart = _to_chart_spec(pca_result.get("plot_data", {}), "pca", dataset.name or "")
+        analyses["pca"] = {
+            "summary": {"explained_variance": pca_result.get("explained_variance", [])},
+            "parameters": pca_result.get("parameters", {}),
+            "chart": pca_chart,
+        }
+        if pca_chart:
+            charts.append(pca_chart)
+    except Exception as e:
+        _logger.warning(f"PCA 分析失败: {e}")
+        errors.append(f"PCA 分析: {e}")
+
+    # 5. LLM 生成专业解读报告
+    llm_summary = None
+    if use_llm:
+        try:
+            from app.core.deps import get_llm_client_with_config
+            llm_client = await get_llm_client_with_config(db)
+
+            # 构造分析摘要
+            de_summary = analyses.get("differential", {}).get("summary", {})
+            cl_summary = analyses.get("clustering", {}).get("summary", {})
+            pw_summary = analyses.get("pathway", {}).get("summary", {})
+            pca_summary = analyses.get("pca", {}).get("summary", {})
+            top_pathways = analyses.get("pathway", {}).get("pathways", [])[:5]
+
+            report_prompt = f"""你是资深生物信息学分析师。请基于以下分析结果，生成一份专业的数据分析报告。
+
+## 数据集信息
+- 名称：{dataset.name}
+- 类型：{dataset.data_type}
+- 解析状态：{dataset.parse_status}
+
+## 分析结果摘要
+
+### 1. 差异表达分析
+- 总基因数：{de_summary.get('total', 'N/A')}
+- 上调基因：{de_summary.get('up_regulated', 'N/A')}
+- 下调基因：{de_summary.get('down_regulated', 'N/A')}
+
+### 2. 聚类分析
+- 聚类数量：{cl_summary.get('n_clusters', 'N/A')}
+- 聚类基因数：{cl_summary.get('clusters', 'N/A')}
+
+### 3. 通路富集
+- 富集通路数：{pw_summary.get('pathways_found', 'N/A')}
+- Top 通路：{', '.join([p.get('name', '') for p in top_pathways[:3]])}
+
+### 4. PCA 主成分分析
+- 解释方差：{pca_summary.get('explained_variance', 'N/A')}
+
+## 报告要求
+
+请生成包含以下章节的专业报告（Markdown 格式）：
+1. **概述**：数据集概况和分析目标
+2. **差异表达分析**：结果解读和生物学意义
+3. **聚类分析**：亚群识别和异质性分析
+4. **通路富集**：显著通路和生物学功能
+5. **PCA 降维**：样本分布和批次效应
+6. **综合结论**：关键发现和研究建议
+7. **后续建议**：推荐的验证实验和深入分析方向
+
+请用中文输出，语言专业但不晦涩。"""
+
+            response = await llm_client.chat(
+                messages=[{"role": "user", "content": report_prompt}],
+                model=settings.LLM_MODEL_FAST,
+            )
+            if isinstance(response, dict):
+                llm_summary = response.get("content", "")
+            elif isinstance(response, str):
+                llm_summary = response
+        except Exception as e:
+            _logger.warning(f"LLM 报告生成失败（不影响图表结果）: {e}")
+            errors.append(f"LLM 报告生成: {e}")
+
+    report = {
+        "dataset_id": str(dataset_id),
+        "dataset_name": dataset.name,
+        "data_type": dataset.data_type,
+        "generated_at": str(datetime.now()),
+        "use_mock": use_mock,
+        "analyses": analyses,
+        "charts": charts,
+        "llm_summary": llm_summary,
+        "errors": errors,
+        "success_count": len(analyses),
+        "total_count": 4,
+    }
+
+    return success_response(report)
 
 
 @router.post("/{dataset_id}/export", response_model=ApiResponse[Dict[str, Any]], summary="导出分析结果")

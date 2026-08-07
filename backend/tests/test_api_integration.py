@@ -448,7 +448,7 @@ class TestDataPipeline:
         csv_content = b"gene,expression\nEGFR,1.5\nKRAS,2.3\nTP53,0.8\n"
         resp = await client.post(
             "/api/v1/data/upload",
-            params={
+            data={
                 "project_id": project_id,
                 "name": "Test RNA-seq Dataset",
                 "data_type": "rna_seq",
@@ -477,7 +477,7 @@ class TestDataPipeline:
         project_id = proj.json()["id"]
         await client.post(
             "/api/v1/data/upload",
-            params={"project_id": project_id, "name": "DS1", "data_type": "rna_seq"},
+            data={"project_id": project_id, "name": "DS1", "data_type": "rna_seq"},
             files={"file": ("d.csv", b"a,b\n1,2\n", "text/csv")},
             headers=auth_headers,
         )
@@ -500,7 +500,7 @@ class TestDataPipeline:
         project_id = proj.json()["id"]
         upload = await client.post(
             "/api/v1/data/upload",
-            params={"project_id": project_id, "name": "Detail DS", "data_type": "rna_seq"},
+            data={"project_id": project_id, "name": "Detail DS", "data_type": "rna_seq"},
             files={"file": ("d.csv", b"gene,expr\nA,1\n", "text/csv")},
             headers=auth_headers,
         )
@@ -525,7 +525,7 @@ class TestDataPipeline:
         project_id = proj.json()["id"]
         upload = await client.post(
             "/api/v1/data/upload",
-            params={"project_id": project_id, "name": "Parse DS", "data_type": "rna_seq"},
+            data={"project_id": project_id, "name": "Parse DS", "data_type": "rna_seq"},
             files={"file": ("d.csv", b"gene,expr\nA,1\nB,2\n", "text/csv")},
             headers=auth_headers,
         )
@@ -551,7 +551,7 @@ class TestDataPipeline:
         project_id = proj.json()["id"]
         upload = await client.post(
             "/api/v1/data/upload",
-            params={"project_id": project_id, "name": "Quality DS", "data_type": "rna_seq"},
+            data={"project_id": project_id, "name": "Quality DS", "data_type": "rna_seq"},
             files={"file": ("d.csv", b"gene,expr\nA,1\n", "text/csv")},
             headers=auth_headers,
         )
@@ -856,13 +856,13 @@ class TestChat:
 
     @pytest.mark.asyncio
     async def test_chat_missing_message(self, client: AsyncClient, auth_headers: dict):
-        """POST /chat 缺 message 字段 → 400 VALIDATION_ERROR"""
+        """POST /chat 缺 message 字段 → 422 VALIDATION_ERROR"""
         resp = await client.post(
             "/api/v1/chat",
             json={},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert_envelope_error(resp.json(), resp.headers, "VALIDATION_ERROR")
 
     @pytest.mark.asyncio
@@ -966,28 +966,28 @@ class TestErrorScenarios:
         assert_headers_present(resp.headers)
 
     @pytest.mark.asyncio
-    async def test_422_validation_error_becomes_400(
+    async def test_422_validation_error_becomes_422(
         self, client: AsyncClient, auth_headers: dict
     ):
-        """请求体校验失败 → 400 VALIDATION_ERROR 信封（中间件转换 422 → 400）"""
+        """请求体校验失败 → 422 VALIDATION_ERROR 信封（与 OpenAPI 默认语义一致）"""
         # POST /projects 需要 name 字段；传空 body 应触发 Pydantic 校验错误
         resp = await client.post(
             "/api/v1/projects",
             json={},  # 缺必填字段 name
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         body = resp.json()
         assert_envelope_error(body, resp.headers, "VALIDATION_ERROR")
 
     @pytest.mark.asyncio
-    async def test_400_validation_error_login_missing_fields(self, client: AsyncClient):
-        """POST /auth/login 缺字段 → 400 VALIDATION_ERROR"""
+    async def test_422_validation_error_login_missing_fields(self, client: AsyncClient):
+        """POST /auth/login 缺字段 → 422 VALIDATION_ERROR"""
         resp = await client.post(
             "/api/v1/auth/login",
             json={},  # 缺 email 和 password
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert_envelope_error(resp.json(), resp.headers, "VALIDATION_ERROR")
 
     @pytest.mark.asyncio

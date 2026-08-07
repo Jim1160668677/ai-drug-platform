@@ -397,6 +397,9 @@ class TestRealLLMClient:
 
     def test_init_missing_api_key_raises(self):
         with patch("app.clients.real.llm_real.settings") as mock_settings:
+            # AGNES_API_KEY 和 OPENAI_API_KEY 都必须为空才会触发 RuntimeError
+            # （系统默认走 Agnes，仅 OPENAI_API_KEY 为空不够）
+            mock_settings.AGNES_API_KEY = ""
             mock_settings.OPENAI_API_KEY = ""
             mock_settings.LLM_MODEL_DEEP = "gpt-4o"
             with pytest.raises(RuntimeError, match="LLM API key"):
@@ -745,8 +748,15 @@ class TestRealChemblClient:
 
     @pytest.mark.asyncio
     async def test_find_approved_drugs_success(self):
+        """两步查询：activity.json → molecule/{id}.json
+
+        新实现（修复 P0-4 后）：
+        1. /activity.json?target_chembl_id=X 找活性分子
+        2. /molecule/{id}.json 查每个分子的 max_phase / smiles / 名称
+        """
         client = RealChemblClient()
 
+        # Step 0: target 查询
         target_resp = MagicMock()
         target_resp.status_code = 200
         target_resp.raise_for_status = MagicMock()
@@ -754,32 +764,50 @@ class TestRealChemblClient:
             "targets": [{"target_chembl_id": "CHEMBL203", "pref_name": "EGFR"}]
         }
 
-        indication_resp = MagicMock()
-        indication_resp.status_code = 200
-        indication_resp.raise_for_status = MagicMock()
-        indication_resp.json.return_value = {
-            "drug_indications": [
+        # Step 1: activity 查询 → 返回一个活性分子
+        activity_resp = MagicMock()
+        activity_resp.status_code = 200
+        activity_resp.raise_for_status = MagicMock()
+        activity_resp.json.return_value = {
+            "activities": [
                 {
                     "molecule_chembl_id": "CHEMBL123",
-                    "mesh_heading": "Lung Cancer",
-                    "efo_term": "Carcinoma",
-                    "max_phase_for_ind": 4,
+                    "target_chembl_id": "CHEMBL203",
+                    "standard_type": "IC50",
+                    "standard_value": "10.0",
                 }
             ]
+        }
+
+        # Step 2: molecule 查询 → 返回分子详情
+        molecule_resp = MagicMock()
+        molecule_resp.status_code = 200
+        molecule_resp.raise_for_status = MagicMock()
+        molecule_resp.json.return_value = {
+            "molecule_chembl_id": "CHEMBL123",
+            "pref_name": "Gefitinib",
+            "max_phase": 4,
+            "molecule_structures": {
+                "canonical_smiles": "COC1=C(OCCCN2CCOCC2)C=CC2=C1NC=N2"
+            },
+            "first_approval": 2002,
+            "molecule_properties": {"full_mwt": 446.9},
         }
 
         mock_async_client = MagicMock()
         mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
         mock_async_client.__aexit__ = AsyncMock(return_value=None)
-        mock_async_client.get = AsyncMock(side_effect=[target_resp, indication_resp])
+        mock_async_client.get = AsyncMock(side_effect=[target_resp, activity_resp, molecule_resp])
 
         with patch("httpx.AsyncClient", return_value=mock_async_client):
             result = await client.find_approved_drugs("EGFR")
 
         assert len(result) == 1
         assert result[0]["chembl_id"] == "CHEMBL123"
-        assert result[0]["indication"] == "Lung Cancer"
+        assert result[0]["name"] == "Gefitinib"
         assert result[0]["max_phase"] == 4
+        assert result[0]["smiles"] is not None
+        assert result[0]["target_gene"] == "EGFR"
 
 
 # ============================================================

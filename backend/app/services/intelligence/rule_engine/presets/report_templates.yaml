@@ -1,0 +1,85 @@
+# 报告模板规则集
+# 根据分析结果类型自动选择报告模板与解读深度
+ruleset:
+  name: report_template_rules
+  version: "1.0"
+  description: 报告模板规则 — 根据分析类型与数据规模自动选择报告模板
+  rules:
+    - id: deep_insight_report
+      name: 深度洞察报告触发
+      description: 关键靶点/分子 → 生成深度洞察报告
+      when:
+        any:
+          - field: target.priority
+            op: "=="
+            value: "high"
+          - field: molecule.druglikeness_score
+            op: ">="
+            value: 0.8
+      then:
+        - action: set_field
+          target: report.tier
+          value: "deep_insight"
+        - action: set_field
+          target: report.template
+          value: "deep_insight_template"
+        - action: log
+          message: 触发深度洞察报告生成
+      priority: 10
+      tags: [report]
+
+    - id: fast_screen_report
+      name: 快速筛查报告
+      description: 默认报告层级
+      when:
+        all:
+          - field: report.tier
+            op: not_exists
+            value: null
+      then:
+        - action: set_field
+          target: report.tier
+          value: "fast_screen"
+        - action: set_field
+          target: report.template
+          value: "fast_screen_template"
+      priority: 1
+      tags: [report]
+
+    - id: multi_target_synergy_report
+      name: 多靶点协同报告
+      description: 项目有≥3个高置信度靶点 → 生成协同组合报告
+      when:
+        all:
+          - field: project.high_confidence_target_count
+            op: ">="
+            value: 3
+      then:
+        - action: set_field
+          target: report.template
+          value: "synergy_combination_template"
+        - action: trigger_reasoning
+          params:
+            goal: 基于多个高置信度靶点推理协同组合治疗方案
+      priority: 8
+      tags: [report, synergy]
+
+    - id: genome_interpretation_report
+      name: 基因组解读报告
+      description: 风险评估完成 → 生成个性化解读报告
+      when:
+        all:
+          - field: risk_assessment.risk_level
+            op: in
+            value: ["high", "medium"]
+      then:
+        - action: set_field
+          target: report.template
+          value: "genome_interpretation_template"
+        - action: call_plugin
+          params:
+            name: collect_evidence
+            params:
+              trigger_event: genome_interpreted
+      priority: 7
+      tags: [report, genome]

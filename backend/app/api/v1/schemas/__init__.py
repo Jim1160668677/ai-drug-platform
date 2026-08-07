@@ -117,6 +117,7 @@ class TargetResponse(BaseSchema):
 
 class MoleculeResponse(BaseSchema):
     id: UUID
+    target_id: Optional[UUID] = None
     smiles: str
     name: Optional[str]
     chembl_id: Optional[str]
@@ -253,3 +254,240 @@ class LLMTestResponse(BaseModel):
     model: Optional[str] = None
     response_text: Optional[str] = None
     duration_sec: Optional[float] = None
+
+
+# ========== 用户级 LLM 配置（BYO Key）==========
+
+class UserLLMConfigCreate(BaseModel):
+    """创建用户级 LLM 配置"""
+    name: str = Field(..., description="配置名称，如 豆包/DeepSeek/OpenAI")
+    provider: str = Field("openai_compatible", description="提供商标识")
+    base_url: str = Field(..., description="基础 URL")
+    api_key: str = Field(..., description="API 密钥")
+    model_name: str = Field(..., description="模型名")
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(2000, ge=1, le=32000)
+    timeout_sec: int = Field(60, ge=1, le=600)
+    is_active: bool = Field(False, description="是否设为当前激活")
+
+
+class UserLLMConfigUpdate(BaseModel):
+    """更新用户级 LLM 配置"""
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(None, ge=1, le=32000)
+    timeout_sec: Optional[int] = Field(None, ge=1, le=600)
+    is_active: Optional[bool] = None
+
+
+class UserLLMConfigResponse(BaseSchema):
+    """用户级 LLM 配置响应（API key 脱敏）"""
+    id: UUID
+    name: str
+    provider: str
+    base_url: str
+    api_key_masked: str
+    model_name: str
+    temperature: float
+    max_tokens: int
+    timeout_sec: int
+    is_active: bool
+    last_test_at: Optional[datetime]
+    last_test_success: Optional[bool]
+    last_test_message: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserLLMTestRequest(BaseModel):
+    """测试用户级 LLM 配置连通性"""
+    config_id: Optional[UUID] = Field(None, description="不传则测试当前激活配置")
+    custom_message: Optional[str] = Field(None, description="自定义测试消息，默认 ping")
+
+
+class UserLLMTestResponse(BaseModel):
+    success: bool
+    message: str
+    model: Optional[str] = None
+    response_text: Optional[str] = None
+    duration_sec: Optional[float] = None
+
+
+# ========== 个人基因组解读模块 ==========
+
+class TraitCreate(BaseModel):
+    """创建性状"""
+    name: str = Field(..., description="性状名，如 过敏易感")
+    category: str = Field(..., description="性状分类")
+    description: Optional[str] = None
+    icon: Optional[str] = None
+
+
+class TraitResponse(BaseSchema):
+    """性状响应"""
+    id: UUID
+    name: str
+    category: str
+    description: Optional[str]
+    icon: Optional[str]
+    created_at: datetime
+
+
+class SnpLocusResponse(BaseSchema):
+    """SNP 位点响应"""
+    id: UUID
+    rsid: str
+    chromosome: str
+    position_grch37: Optional[int]
+    position_grch38: Optional[int]
+    ref_allele: Optional[str]
+    alt_allele: Optional[str]
+    gene_symbol: Optional[str]
+    trait_id: UUID
+    effect_allele: Optional[str]
+    risk_genotype: Optional[str]
+    effect_size: Optional[float]
+    weight: float
+    locus_tier: str
+    population: str
+    evidence_source: str
+    evidence_level: str
+    pmid: Optional[str]
+    is_approved: bool
+    created_at: datetime
+
+
+class PersonalGenomeResponse(BaseSchema):
+    """个人基因组文件响应"""
+    id: UUID
+    owner_id: UUID
+    project_id: Optional[UUID]
+    file_name: str
+    genome_build: str
+    source_format: str
+    total_variants: Optional[int]
+    parsed_summary: Optional[dict]
+    quality_metrics: Optional[dict]
+    created_at: datetime
+
+
+class GenotypeMatchResponse(BaseSchema):
+    """基因型匹配响应"""
+    id: UUID
+    personal_genome_id: UUID
+    snp_locus_id: UUID
+    rsid: Optional[str] = None
+    gene_symbol: Optional[str] = None
+    user_genotype: str
+    is_risk: bool
+    risk_score: float
+    note: Optional[str] = None
+
+
+class RiskAssessmentResponse(BaseSchema):
+    """风险评估响应"""
+    id: UUID
+    personal_genome_id: UUID
+    trait_id: UUID
+    trait_name: Optional[str] = None
+    overall_risk_score: float
+    risk_level: str
+    core_loci_matched: int
+    auxiliary_loci_matched: int
+    matched_loci_ids: Optional[list] = None
+    interpretation: Optional[dict] = None
+    llm_model: Optional[str] = None
+    created_at: datetime
+
+
+class LifestyleRecommendationResponse(BaseSchema):
+    """生活建议响应"""
+    id: UUID
+    risk_assessment_id: UUID
+    category: str
+    content: str
+    priority: str
+    evidence: Optional[str] = None
+
+
+class LociSearchRequest(BaseModel):
+    """AI 检索位点请求"""
+    genome_build: str = Field("GRCh37", description="基因组版本 GRCh37/GRCh38/unknown")
+    use_external_sources: bool = Field(True, description="是否交叉验证 GWAS Catalog/ClinVar/OMIM")
+
+
+class InterpretRequest(BaseModel):
+    """生成解读报告请求"""
+    trait_id: Optional[UUID] = Field(None, description="性状 ID（可选，端点已通过 assessment_id 隐式确定）")
+    use_llm: bool = Field(True, description="是否调用 LLM 生成解读")
+    user_llm_config_id: Optional[UUID] = Field(None, description="用户级 LLM配置 ID（不传则用系统激活）")
+
+
+class GenomeExportRequest(BaseModel):
+    """基因组解读报告导出请求"""
+    personal_genome_id: UUID
+    format: str = Field("both", description="导出格式：markdown / json / both")
+    user_llm_config_id: Optional[UUID] = Field(None, description="用户级 LLM 配置 ID（可选）")
+
+
+class KbExpandRequest(BaseModel):
+    """知识库扩充请求"""
+    trait_ids: Optional[List[UUID]] = Field(None, description="指定性状 ID 列表（不传则全部）")
+    user_llm_config_id: Optional[UUID] = None
+
+
+class PromptTemplateResponse(BaseSchema):
+    """Prompt 模板响应"""
+    id: UUID
+    name: str
+    template_type: str
+    genome_build: Optional[str]
+    trait_category: Optional[str]
+    content: str
+    description: Optional[str]
+    is_active: bool
+    created_at: datetime
+
+
+class PromptTemplateCreate(BaseModel):
+    """创建 Prompt 模板"""
+    name: str
+    template_type: str = Field(..., description="trait_search/interpretation/recommendation/general")
+    genome_build: Optional[str] = None
+    trait_category: Optional[str] = None
+    content: str
+    description: Optional[str] = None
+    is_active: bool = True
+
+
+class PersonalizedTreatmentRequest(BaseModel):
+    """个性化治疗推荐请求"""
+    personal_genome_id: UUID
+    project_id: Optional[UUID] = Field(None, description="项目 ID（可选）")
+    disease: Optional[str] = Field(None, description="疾病名（用于推荐靶向药）")
+    user_llm_config_id: Optional[UUID] = Field(
+        None, description="用户级 LLM 配置 ID（不传则用激活配置或系统默认）"
+    )
+
+
+# 导出新增 schemas
+__all__ = [
+    # 既有（部分保留）
+    "BaseSchema", "TokenResponse", "UserCreate", "UserResponse", "UserUpdateRole",
+    "UserUpdateStatus", "UserListResponse", "ProjectCreate", "ProjectResponse",
+    "StandardResponse", "ApiResponse", "PagedResponse", "success_response", "paged_response",
+    "LLMConfigCreate", "LLMConfigUpdate", "LLMConfigResponse", "LLMTestRequest", "LLMTestResponse",
+    # 用户级 LLM
+    "UserLLMConfigCreate", "UserLLMConfigUpdate", "UserLLMConfigResponse",
+    "UserLLMTestRequest", "UserLLMTestResponse",
+    # 个人基因组解读
+    "TraitCreate", "TraitResponse", "SnpLocusResponse", "PersonalGenomeResponse",
+    "GenotypeMatchResponse", "RiskAssessmentResponse", "LifestyleRecommendationResponse",
+    "LociSearchRequest", "InterpretRequest", "KbExpandRequest",
+    "PromptTemplateResponse", "PromptTemplateCreate", "PersonalizedTreatmentRequest",
+    "GenomeExportRequest",
+]

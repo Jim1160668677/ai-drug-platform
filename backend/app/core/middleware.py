@@ -116,6 +116,20 @@ class EnvelopeMiddleware:
                         except ValueError:
                             content_length = 0
 
+                # 修复：JSON 响应统一补充 charset=utf-8
+                # RFC 8259 规定 JSON 默认 UTF-8，但部分旧客户端（如 PowerShell
+                # Invoke-WebRequest、.NET Framework HttpClient）在 Content-Type 缺少
+                # charset 时按 ISO-8859-1 解码，导致中文显示为 mojibake。
+                if content_type == "application/json":
+                    content_type = "application/json; charset=utf-8"
+                    for i, (key, _) in enumerate(response_headers):
+                        if key == b"content-type":
+                            response_headers[i] = (
+                                b"content-type",
+                                content_type.encode("latin-1"),
+                            )
+                            break
+
                 # 注入 X-Request-ID 和 X-Response-Time-ms 响应头
                 # 避免重复：先移除已有的同名头
                 response_headers = [

@@ -147,7 +147,67 @@ class UpstreamError(AppException):
         super().__init__(message, details=details, **kwargs)
 
 
+# ========== Agent 相关异常 ==========
+
+class TaskTimeoutError(AppException):
+    """Agent 任务执行超时"""
+    code = "TASK_TIMEOUT"
+    status_code = HTTP_502_BAD_GATEWAY
+    default_message = "任务执行超时"
+
+    def __init__(self, message: Optional[str] = None, *, timeout_sec: Optional[int] = None, **kwargs):
+        details = kwargs.pop("details", None) or {}
+        if timeout_sec:
+            details["timeout_sec"] = timeout_sec
+        super().__init__(message, details=details, **kwargs)
+
+
+class QuotaExceededError(AppException):
+    """配额超限（如 token/任务数）"""
+    code = "QUOTA_EXCEEDED"
+    status_code = HTTP_429_TOO_MANY_REQUESTS
+    default_message = "配额超限"
+
+    def __init__(self, message: Optional[str] = None, *, quota_type: Optional[str] = None, **kwargs):
+        details = kwargs.pop("details", None) or {}
+        if quota_type:
+            details["quota_type"] = quota_type
+        super().__init__(message, details=details, **kwargs)
+
+
+class TaskCancelledError(AppException):
+    """Agent 任务被用户取消"""
+    code = "TASK_CANCELLED"
+    status_code = HTTP_409_CONFLICT
+    default_message = "任务已取消"
+
+
+class ConfirmationRejectedError(AppException):
+    """用户拒绝副作用确认"""
+    code = "CONFIRMATION_REJECTED"
+    status_code = HTTP_409_CONFLICT
+    default_message = "用户拒绝执行该操作"
+
+
 # ========== 错误信封构造 ==========
+
+def _safe_jsonable(obj: Any) -> Any:
+    """递归将对象转换为 JSON 可序列化形式（bytes → str，其他类型递归处理）
+
+    解决 Pydantic RequestValidationError.errors() 中 ctx 字段可能包含 bytes
+    导致 JSONResponse 序列化失败（TypeError: Object of type bytes is not JSON serializable）的问题。
+    """
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return obj.decode("latin-1", errors="replace")
+    if isinstance(obj, dict):
+        return {k: _safe_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_safe_jsonable(v) for v in obj]
+    return obj
+
 
 def _error_envelope(
     code: str,
@@ -160,12 +220,14 @@ def _error_envelope(
     Returns:
         {success: false, error: {code, message, details}, meta: {request_id}}
     """
+    # 清洗 details：将 bytes 等非 JSON 类型转为 str，避免 JSONResponse 序列化失败
+    safe_details = _safe_jsonable(details) if details is not None else None
     return {
         "success": False,
         "error": {
             "code": code,
             "message": message,
-            "details": details,
+            "details": safe_details,
         },
         "meta": {
             "request_id": request_id,
@@ -216,7 +278,12 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):
-        """处理 Pydantic 校验错误（422 → 400 信封）"""
+        """处理 Pydantic 校验错误（422 信封，与 OpenAPI 默认语义一致）
+
+        修复 BUG-003：原将 RequestValidationError 转为 HTTP 400，不符合
+        FastAPI/OpenAPI 默认的 422 语义，导致依赖状态码的客户端行为异常。
+        现统一返回 422 + VALIDATION_ERROR 业务码。
+        """
         request_id = _get_request_id_safe(request)
         logger.warning(f"Validation error: {exc.errors()}")
         envelope = _error_envelope(
@@ -226,7 +293,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             request_id=request_id,
         )
         return JSONResponse(
-            status_code=HTTP_400_BAD_REQUEST,
+            status_code=HTTP_422_UNPROCESSABLE_ENTITY,
             content=envelope,
             headers={"X-Request-ID": request_id},
         )

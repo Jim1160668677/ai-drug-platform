@@ -25,9 +25,22 @@ logger = logging.getLogger(__name__)
 
 # 已知的关键癌基因/抑癌基因映射（用于从 parsed_summary 中识别变异/差异基因）
 KNOWN_TARGET_GENES = {
+    # 泛癌经典癌基因 / 抑癌基因
     "EGFR", "KRAS", "BRAF", "PIK3CA", "TP53", "PTEN", "ALK", "ROS1", "MET",
-    "ERBB2", "ERBB3", "BRAF", "NRAS", "MAP2K1", "B7H3", "CD276", "FAP",
+    "ERBB2", "ERBB3", "NRAS", "MAP2K1", "B7H3", "CD276", "FAP",
     "PD-L1", "CD274", "CTLA4", "VEGFA", "FGFR1", "FGFR2", "FGFR3", "RET",
+    "MYC", "RB1", "ATM", "ATR", "BRCA1", "BRCA2", "APC", "CTNNB1", "SMAD4",
+    "CDK4", "CDK6", "CCND1", "CCNE1", "CDKN2A", "MDM2", "MDM4",
+    "KIT", "PDGFRA", "FLT3", "JAK2", "NOTCH1", "IDH1", "IDH2", "TERT",
+    # 骨肉瘤驱动基因（Sid Sijbrandij 数据集）
+    "COL1A1", "COL1A2", "COL3A1", "COL5A1", "SPARC", "BGLAP", "IBSP", "SPP1", "ALPL",
+    "RUNX2", "FOS", "JUN", "FOSL1", "JUND", "ATF4", "TWIST1", "SOX9",
+    "CD274", "PDCD1LG2", "CTLA4", "LAG3", "TIGIT", "HAVCR2",
+    "VEGFA", "VEGFB", "ANGPT1", "ANGPT2", "PDGFB", "MMP9", "MMP2",
+    "FOXM1", "EZH2", "YAP1", "TAZ", "WWTR1", "AURKA", "AURKB",
+    "GNAS", "PRKAR1A", "DICER1", "RECQL4", "WRN", "BLM",
+    # 骨肉瘤特征性扩增区域（12q13-14）
+    "CDK4", "MDM2", "HMGA2", "TSPAN31", "CUL4A", "YEATS4", "FRS2",
 }
 
 
@@ -72,9 +85,10 @@ class TargetIdentifier:
                 "message": "项目无可用数据集",
             }
 
-        # 2. 从 parsed_summary 提取变异 / 差异基因
+        # 2. 从 parsed_summary 提取变异 / 差异基因 / CNV
         variants: List[str] = []  # 形如 "chr7:55259515:T>A"
         diff_genes: List[str] = []  # 形如 "EGFR"
+        cnv_segments: List[Dict[str, Any]] = []  # 形如 [{"gene": "CDK4", "type": "amplification", "copy_number": 8}]
 
         for ds in datasets:
             summary = ds.parsed_summary or {}
@@ -96,6 +110,10 @@ class TargetIdentifier:
                     diff_genes.append(g["symbol"])
                 elif isinstance(g, str):
                     diff_genes.append(g)
+            # CNV 数据 — 含 cnv_segments / cnv_calls 列表
+            for seg in (summary.get("cnv_segments") or []) + (summary.get("cnv_calls") or []):
+                if isinstance(seg, dict):
+                    cnv_segments.append(seg)
 
         # 3. 变异注释（如果存在变异）
         variant_annotations: List[Dict[str, Any]] = []
@@ -201,6 +219,7 @@ class TargetIdentifier:
                 neighbors=neighbors,
                 approved_drugs=approved,
                 diff_genes_set=set(unique_genes),
+                cnv_segments=cnv_segments,
             )
             # PubMed 文献数加权到置信度（文献越多，证据越充分）
             if pubmed_count > 0:
@@ -301,42 +320,87 @@ class TargetIdentifier:
         neighbors: List[Dict],
         approved_drugs: List[Dict],
         diff_genes_set: set,
+        cnv_segments: List[Dict] = None,
     ) -> float:
         """计算靶点置信度（0-1）
 
-        维度：
-        - 变异致病性（30%）：含 Pathogenic 变异加分
-        - 差异表达（20%）：在差异基因集合中加分
-        - PPI 中心性（25%）：邻居数越多分越高
+        5 维度加权（基于多组学证据）：
+        - 变异致病性（25%）：含 Pathogenic 变异 / HIGH impact 变异加分
+        - 差异表达（15%）：在差异基因集合中加分
+        - CNV 扩增/缺失（15%）：基因在扩增/缺失区域加分（12q13-14 等）
+        - PPI 中心性（20%）：邻居数越多分越高
         - 已知药物（25%）：有获批药物加分
+
+        Args:
+            gene: 基因符号
+            variants: 该基因的变异注释列表
+            neighbors: PPI 邻居列表
+            approved_drugs: ChEMBL 已获批药物列表
+            diff_genes_set: 差异表达基因集合
+            cnv_segments: CNV 段列表（可选），形如 [{"gene": "CDK4", "type": "amplification", "copy_number": 8}, ...]
+                          或 [{"chrom": "12", "start": 69000000, "end": 70000000, "type": "gain"}]
         """
         score = 0.0
 
-        # 变异致病性
+        # === 1. 变异致病性 (25%) ===
         if variants:
             pathogenic_count = sum(
                 1 for v in variants
                 if "pathogenic" in ((v.get("clinvar") or {}).get("clnsig") or "").lower()
             )
-            score += min(0.30, 0.10 + 0.10 * pathogenic_count)
+            high_impact_count = sum(
+                1 for v in variants
+                if (v.get("impact") or "").upper() == "HIGH"
+                or (v.get("effect") or "").lower() in {"missense_variant", "frameshift_variant", "stop_gained"}
+            )
+            # Pathogenic 变异 + HIGH impact 变异叠加
+            variant_score = 0.08 + 0.08 * pathogenic_count + 0.04 * high_impact_count
+            score += min(0.25, variant_score)
         else:
-            score += 0.05
+            score += 0.04
 
-        # 差异表达
+        # === 2. 差异表达 (15%) ===
         if gene in diff_genes_set:
-            score += 0.20
-        else:
-            score += 0.05
-
-        # PPI 中心性
-        ppi_count = len(neighbors)
-        score += min(0.25, 0.05 + 0.02 * ppi_count)
-
-        # 已知药物
-        if approved_drugs:
-            score += min(0.25, 0.10 + 0.05 * len(approved_drugs))
+            score += 0.15
         else:
             score += 0.03
+
+        # === 3. CNV 扩增/缺失 (15%) — 新增维度 ===
+        cnv_score = 0.0
+        if cnv_segments:
+            for seg in cnv_segments:
+                # 形式 1: 显式 gene 字段
+                seg_gene = (seg.get("gene") or "").upper()
+                seg_type = (seg.get("type") or seg.get("cnv_type") or "").lower()
+                # 形式 2: chrom + 基因位置（间接匹配，此处简化：仅按 gene 字段）
+                if seg_gene == gene.upper():
+                    if "amp" in seg_type or "gain" in seg_type:
+                        # 扩增得分高（驱动基因扩增）
+                        copy_num = seg.get("copy_number") or seg.get("major_copy_number") or 0
+                        try:
+                            copy_num = int(copy_num)
+                        except (TypeError, ValueError):
+                            copy_num = 0
+                        cnv_score = max(cnv_score, 0.15 if copy_num >= 6 else 0.10)
+                    elif "loss" in seg_type or "del" in seg_type or "loh" in seg_type:
+                        # 杂合缺失（抑癌基因）
+                        cnv_score = max(cnv_score, 0.10)
+        score += cnv_score
+
+        # === 4. PPI 中心性 (20%) ===
+        ppi_count = len(neighbors)
+        score += min(0.20, 0.04 + 0.016 * ppi_count)
+
+        # === 5. 已知药物 (25%) ===
+        if approved_drugs:
+            # 优先临床阶段高的（max_phase=4 已批准）
+            phase_4_count = sum(
+                1 for d in approved_drugs
+                if (d.get("max_phase") or 0) == 4
+            )
+            score += min(0.25, 0.08 + 0.04 * phase_4_count + 0.02 * (len(approved_drugs) - phase_4_count))
+        else:
+            score += 0.02
 
         return min(score, 1.0)
 

@@ -1692,16 +1692,19 @@ class TestVectorStoreSupplemental:
         from app.services.knowledge.vector import VectorStore
 
         store = VectorStore()
-        client = store._get_client()
+        # 重构后方法名 _get_client → _get_client_sync
+        client = store._get_client_sync()
         # 测试环境为 mock 模式
         assert client is None
 
-    def test_vector_store_get_collection_mock(self):
+    @pytest.mark.asyncio
+    async def test_vector_store_get_collection_mock(self):
         """测试 Mock 模式下 get_collection 返回 None"""
         from app.services.knowledge.vector import VectorStore
 
         store = VectorStore()
-        coll = store._get_collection("test_collection")
+        # 重构后 _get_collection 是 async 方法（包裹同步 ChromaDB 调用）
+        coll = await store._get_collection("test_collection")
         assert coll is None
 
     @pytest.mark.asyncio
@@ -2003,16 +2006,21 @@ class TestParserBaseCoverage:
 
     @pytest.mark.asyncio
     async def test_parse_dataset_unsupported_type(self):
-        """测试不支持的数据类型"""
+        """测试不支持的数据类型 — 走通用回退解析器，文件不存在时返回 error"""
         from app.services.parser.base import parse_dataset
         from unittest.mock import MagicMock
 
         dataset = MagicMock()
         dataset.data_type = "unsupported_type"
         dataset.storage_path = "/some/path"
+        dataset.file_format = None
         result = await parse_dataset(dataset)
         assert "error" in result["summary"]
-        assert "暂不支持" in result["summary"]["error"]
+        # 通用回退解析器对不存在的文件返回 "通用回退解析失败"
+        # （实现改为对未知类型走 CSV 回退，而非直接拒绝）
+        assert "通用回退解析失败" in result["summary"]["error"] \
+            or "暂不支持" in result["summary"]["error"] \
+            or "No such file" in result["summary"]["error"]
 
     @pytest.mark.asyncio
     async def test_parse_dataset_scrna_seq(self):

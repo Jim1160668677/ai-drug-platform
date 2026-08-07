@@ -2,11 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Atom, X, FlaskConical, Plus, Gauge, Microscope, ScanSearch, Trash2, Zap, BookOpen, Target as TargetIcon, Link2 } from 'lucide-react';
+import { Atom, X, FlaskConical, Plus, Gauge, Microscope, ScanSearch, Trash2, Zap, BookOpen, Target as TargetIcon, Link2, Sparkles } from 'lucide-react';
 import {
   getMolecules, designMolecule, assessDruglikeness,
   predictProperties, explainMolecule, deleteMolecule, getTargets,
-  designMultiTargetMolecules,
+  designMultiTargetMolecules, autoNameMolecule,
 } from '@/lib/api';
 import { optimizeTreatments } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
@@ -16,6 +16,10 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import PlotlyChart from '@/components/charts/PlotlyChart';
 import ProgressBar from '@/components/ui/ProgressBar';
+import TargetSelect from '@/components/TargetSelect';
+import MoleculeStructure from '@/components/molecules/MoleculeStructure';
+import AIInsightBanner from '@/components/coscientist/AIInsightBanner';
+import ReasoningTrigger from '@/components/coscientist/ReasoningTrigger';
 
 export default function MoleculesPage() {
   const { currentProject } = useAppStore();
@@ -106,7 +110,7 @@ export default function MoleculesPage() {
     mutationFn: async () => {
       setAutoDesignProgress('正在获取靶点列表...');
       const targetsResp = await getTargets();
-      const targetsList = (targetsResp as any)?.items || (Array.isArray(targetsResp) ? targetsResp : []);
+      const targetsList = ((targetsResp as any)?.data ?? (targetsResp as any)?.items) || (Array.isArray(targetsResp) ? targetsResp : []);
       if (!targetsList || targetsList.length === 0) {
         throw new Error('没有可用的靶点，请先在「靶点发现」页面发现靶点');
       }
@@ -202,6 +206,8 @@ export default function MoleculesPage() {
         </div>
       </div>
 
+      <AIInsightBanner entityType="molecule" projectId={currentProject?.id} />
+
       {/* 自动设计区域 */}
       <Card title="一键自动设计">
         <div className="flex items-center gap-4">
@@ -244,6 +250,7 @@ export default function MoleculesPage() {
               <thead>
                 <tr className="border-b border-gray-200 text-gray-500">
                   <th className="text-left py-2 px-3">名称</th>
+                  <th className="text-left py-2 px-3">结构式</th>
                   <th className="text-left py-2 px-3">SMILES</th>
                   <th className="text-left py-2 px-3">分子量</th>
                   <th className="text-left py-2 px-3">LogP</th>
@@ -255,7 +262,14 @@ export default function MoleculesPage() {
                 {molecules?.map((m: any) => (
                   <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="py-2 px-3 font-medium">{m.name || '未命名'}</td>
-                    <td className="py-2 px-3 font-mono text-xs text-gray-600 max-w-xs truncate">
+                    <td className="py-2 px-3">
+                      {m.smiles ? (
+                        <MoleculeStructure smiles={m.smiles} width={120} height={90} />
+                      ) : (
+                        <span className="text-xs text-gray-400">无 SMILES</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 font-mono text-xs text-gray-600 max-w-xs truncate" title={m.smiles}>
                       {m.smiles}
                     </td>
                     <td className="py-2 px-3">{m.molecular_weight?.toFixed(1) || '—'}</td>
@@ -269,7 +283,7 @@ export default function MoleculesPage() {
                       <span className="ml-1 text-xs text-gray-500">{m.source || ''}</span>
                     </td>
                     <td className="py-2 px-3">
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 items-center">
                         <Button size="sm" variant="ghost" onClick={() => setDetail(m)}>
                           详情
                         </Button>
@@ -281,6 +295,14 @@ export default function MoleculesPage() {
                         >
                           <Trash2 className="w-3 h-3" /> 删除
                         </Button>
+                        <ReasoningTrigger
+                          entityType="molecule"
+                          entityId={m.id}
+                          entityName={m.name}
+                          projectId={currentProject?.id}
+                          reasonType="optimization"
+                          variant="icon"
+                        />
                       </div>
                     </td>
                   </tr>
@@ -302,7 +324,32 @@ export default function MoleculesPage() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between px-5 py-3 border-b">
-              <h3 className="font-semibold">分子详情 — {detail.name || '未命名'}</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-semibold">分子详情 — {detail.name || '未命名'}</h3>
+                {(!detail.name || detail.name === '未命名') && (
+                  <button
+                    onClick={async () => {
+                      if (!detail?.smiles) return;
+                      try {
+                        const r: any = await autoNameMolecule(detail.smiles, 'Mol');
+                        const name = r?.name || r?.data?.name;
+                        if (name) {
+                          setDetail({ ...detail, name });
+                          queryClient.invalidateQueries({ queryKey: ['molecules'] });
+                          toast({ type: 'success', message: `已自动命名：${name}` });
+                        }
+                      } catch (e: any) {
+                        toast({ type: 'error', message: e?.message || '自动命名失败' });
+                      }
+                    }}
+                    className="flex items-center gap-1 px-2 py-0.5 text-xs bg-primary-50 text-primary-700 border border-primary-200 rounded hover:bg-primary-100"
+                    title="基于 Murcko 骨架 + 功能团 + 分子式自动生成名称"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    自动命名
+                  </button>
+                )}
+              </div>
               <button onClick={() => setDetail(null)}>
                 <X className="w-5 h-5 text-gray-400" />
               </button>
@@ -312,6 +359,17 @@ export default function MoleculesPage() {
                 <div className="text-sm text-gray-500 mb-1">SMILES</div>
                 <div className="font-mono text-xs bg-gray-50 p-2 rounded break-all">{detail.smiles}</div>
               </div>
+
+              {/* 2D 化学结构式 */}
+              {detail.smiles && (
+                <div>
+                  <div className="text-sm text-gray-500 mb-1">2D 化学结构式（RDKit 渲染）</div>
+                  <div className="flex justify-center bg-gray-50 p-3 rounded">
+                    <MoleculeStructure smiles={detail.smiles} width={400} height={280} showSmiles={false} />
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="bg-gray-50 p-3 rounded">
                   <div className="text-xs text-gray-500">分子量</div>
@@ -605,6 +663,7 @@ export default function MoleculesPage() {
           result={designResult}
           onClose={() => setShowDesign(false)}
           onSubmit={(payload) => designMutation.mutate(payload)}
+          projectId={currentProject?.id}
         />
       )}
 
@@ -656,11 +715,13 @@ function DesignModal({
   result,
   onClose,
   onSubmit,
+  projectId,
 }: {
   loading: boolean;
   result: any;
   onClose: () => void;
   onSubmit: (payload: any) => void;
+  projectId?: string;
 }) {
   const [targetId, setTargetId] = useState('');
   const [smiles, setSmiles] = useState('');
@@ -688,13 +749,21 @@ function DesignModal({
         </div>
         <div className="p-5 space-y-4">
           <div>
-            <label className="text-sm text-gray-500">靶点 ID（可选）</label>
-            <input
-              className="w-full border border-gray-300 rounded px-3 py-2 mt-1 text-sm"
-              placeholder="例如：96d78aa1-b4f2-4bbd-8d63-43431bca1941"
-              value={targetId}
-              onChange={(e) => setTargetId(e.target.value)}
-            />
+            <label className="text-sm text-gray-500 flex items-center gap-1">
+              <TargetIcon className="w-3.5 h-3.5" />
+              靶点（自动匹配已发现靶点，无需手工复制 ID）
+            </label>
+            <div className="mt-1">
+              <TargetSelect
+                value={targetId}
+                onChange={setTargetId}
+                projectId={projectId}
+                placeholder="选择已发现的靶点（可选）"
+              />
+            </div>
+            <div className="text-xs text-gray-400 mt-1">
+              提示：先在「靶点发现」页面发现靶点，此处会自动列出可选靶点
+            </div>
           </div>
           <div>
             <label className="text-sm text-gray-500">种子 SMILES（可选）</label>
@@ -733,13 +802,26 @@ function DesignModal({
             <div className="mt-4 border-t pt-4">
               <h4 className="text-sm font-semibold mb-2">设计结果</h4>
               {result.designed_molecules?.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {result.designed_molecules.map((m: any, i: number) => (
-                    <div key={i} className="bg-gray-50 p-3 rounded text-sm">
-                      <div className="font-mono text-xs break-all">{m.smiles}</div>
-                      {m.predicted_toxicity !== undefined && (
-                        <div className="text-xs text-gray-500 mt-1">预测毒性: {m.predicted_toxicity.toFixed(3)}</div>
+                    <div key={i} className="bg-gray-50 p-3 rounded text-sm flex gap-3">
+                      {m.smiles && (
+                        <div className="shrink-0">
+                          <MoleculeStructure smiles={m.smiles} width={160} height={120} />
+                        </div>
                       )}
+                      <div className="flex-1 min-w-0">
+                        {m.name && (
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-xs text-gray-500">自动命名：</span>
+                            <span className="text-sm font-semibold text-primary-700">{m.name}</span>
+                          </div>
+                        )}
+                        <div className="font-mono text-xs break-all">{m.smiles}</div>
+                        {m.predicted_toxicity !== undefined && (
+                          <div className="text-xs text-gray-500 mt-1">预测毒性: {m.predicted_toxicity.toFixed(3)}</div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1462,7 +1544,7 @@ function MultiTargetModal({
     if (existingTargets) {
       const list = Array.isArray(existingTargets)
         ? existingTargets
-        : (existingTargets as any)?.items || [];
+        : ((existingTargets as any)?.data ?? (existingTargets as any)?.items) || [];
       if (list.length > 0) {
         const autoTargets = list.slice(0, 5).map((t: any) => ({
           target_id: t.id || t.target_id || '',

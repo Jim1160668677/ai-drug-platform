@@ -9,6 +9,7 @@ import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import PlotlyChart from '@/components/charts/PlotlyChart';
+import AIInsightBanner from '@/components/coscientist/AIInsightBanner';
 
 export default function ExperimentsPage() {
   const { currentProject } = useAppStore();
@@ -53,6 +54,8 @@ export default function ExperimentsPage() {
           Dry Prediction → Wet Experiment → 误差反馈 → 模型迭代
         </p>
       </div>
+
+      <AIInsightBanner entityType="experiment" projectId={currentProject?.id} />
 
       {/* 反馈循环示意图 */}
       <Card title="反馈循环">

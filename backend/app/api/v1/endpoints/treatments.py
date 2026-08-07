@@ -17,6 +17,7 @@ from app.models.treatment import Treatment
 from app.models.user import User
 from app.api.v1.schemas import StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
+from app.services.coscientist.hooks import on_treatment_generated
 
 router = APIRouter()
 
@@ -182,6 +183,12 @@ async def create_treatment(
     )
     db.add(treatment)
     await db.flush()
+
+    # Co-Scientist auto-trigger hook
+    await on_treatment_generated(
+        db=db, user=current_user, project_id=str(treatment.project_id) if treatment.project_id else None,
+        treatment_id=str(treatment.id), treatment_name=treatment.name,
+    )
     return StandardResponse(message="治疗方案已创建", data={"id": str(treatment.id)})
 
 

@@ -162,7 +162,7 @@ class TestEfficacyMonitor:
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
         from app.models.experiment import ExperimentStatus
 
-        treatment = SimpleNamespace(name="Test Treatment")
+        treatment = SimpleNamespace(name="Test Treatment", monitoring_data={})
         exp_result = MagicMock()
         exp_result.scalars.return_value.all.return_value = [
             SimpleNamespace(

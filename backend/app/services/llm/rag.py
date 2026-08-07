@@ -93,18 +93,17 @@ class RAGEngine:
             from app.services.knowledge.vector import get_vector_store
 
             store = get_vector_store()
-            count = 0
-            for doc in documents:
-                try:
-                    await store.add(
-                        texts=[doc.get("text", "")],
-                        metadatas=[doc.get("metadata", {})],
-                        collection=collection,
-                        ids=[doc.get("id")] if doc.get("id") else None,
-                    )
-                    count += 1
-                except Exception as e:
-                    logger.warning(f"向量库添加单文档失败: {e}")
+            # 修复：VectorStore 只有 add_documents 方法，不是 add
+            # 将单个文档组装为列表一次性入库，减少 ChromaDB 调用次数
+            docs_to_add = [
+                {
+                    "id": doc.get("id") or f"doc_{i}",
+                    "text": doc.get("text", ""),
+                    "metadata": doc.get("metadata", {}),
+                }
+                for i, doc in enumerate(documents)
+            ]
+            count = await store.add_documents(docs_to_add, collection=collection)
             logger.info(f"向量库添加 {count}/{len(documents)} 文档到 {collection}")
             return count
         except Exception as e:

@@ -2,8 +2,8 @@
 
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Upload, FileText, Play, BarChart3, X, Trash2, Microscope, Dna, AlertTriangle, CheckCircle, Info, FlaskConical, Download } from 'lucide-react';
-import { getDatasets, uploadData, parseDataset, getQuality, deleteDataset, analyzeDataset, exportDataset } from '@/lib/api';
+import { Upload, FileText, Play, BarChart3, X, Trash2, Microscope, Dna, AlertTriangle, CheckCircle, Info, FlaskConical, Download, FileBarChart } from 'lucide-react';
+import { getDatasets, uploadData, parseDataset, getQuality, deleteDataset, analyzeDataset, exportDataset, generateFullReport } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
 import { toast } from '@/lib/notification';
 import Card from '@/components/ui/Card';
@@ -11,6 +11,7 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import PlotlyChart from '@/components/charts/PlotlyChart';
 import ProgressBar from '@/components/ui/ProgressBar';
+import AIInsightBanner from '@/components/coscientist/AIInsightBanner';
 
 export default function DataPage() {
   const { currentProject } = useAppStore();
@@ -26,6 +27,7 @@ export default function DataPage() {
   const [qualityModal, setQualityModal] = useState<string | null>(null);
   const [bioinfoModal, setBioinfoModal] = useState<string | null>(null);
   const [analysisModal, setAnalysisModal] = useState<string | null>(null);
+  const [reportModal, setReportModal] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const { data: datasets, isLoading } = useQuery({
@@ -96,6 +98,8 @@ export default function DataPage() {
         <h1 className="text-2xl font-bold">数据管理</h1>
         <p className="text-sm text-gray-500 mt-1">多组学数据接入与解析（RNA-seq / scRNA-seq / WES / WGS / VCF / FASTA / 蛋白质组学 / 代谢组学 / 临床影像 / 临床检验等）</p>
       </div>
+
+      <AIInsightBanner entityType="dataset" projectId={currentProject?.id} />
 
       {/* 上传区 */}
       <Card title="上传新数据">
@@ -253,6 +257,13 @@ export default function DataPage() {
                         </Button>
                         <Button
                           size="sm"
+                          variant="primary"
+                          onClick={() => setReportModal(d.id)}
+                        >
+                          <FileBarChart className="w-3 h-3" /> 生成报告
+                        </Button>
+                        <Button
+                          size="sm"
                           variant="ghost"
                           loading={deleteMutation.isPending}
                           onClick={() => setDeleteTarget({ id: d.id, name: d.name })}
@@ -288,6 +299,11 @@ export default function DataPage() {
       {/* 高级分析面板 */}
       {analysisModal && (
         <AnalysisPanel datasetId={analysisModal} onClose={() => setAnalysisModal(null)} />
+      )}
+
+      {/* 专业数据分析报告弹窗 */}
+      {reportModal && (
+        <FullReportModal datasetId={reportModal} onClose={() => setReportModal(null)} />
       )}
 
       {/* 删除确认弹窗 — 替代 native confirm()，避免中文乱码 */}
@@ -1043,6 +1059,219 @@ function AnalysisPanel({ datasetId, onClose }: { datasetId: string; onClose: () 
               </details>
             </Card>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== 专业数据分析报告弹窗 ==========
+function FullReportModal({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['full-report', datasetId],
+    queryFn: () => generateFullReport(datasetId, true),
+    enabled: !!datasetId,
+  });
+
+  const report = data?.data || data;
+  const charts = report?.charts || [];
+  const llmSummary = report?.llm_summary;
+  const analyses = report?.analyses || {};
+  const errors = report?.errors || [];
+  const successCount = report?.success_count || 0;
+
+  // ChartSpec → Plotly data 转换
+  const chartSpecToPlotly = (spec: any): { plotlyData: any[]; layout: any } | null => {
+    if (!spec) return null;
+    const title = spec.title || '';
+    const baseLayout = {
+      title: { text: title, font: { size: 14 } },
+      margin: { t: 50, b: 50, l: 50, r: 20 },
+      height: 380,
+    };
+
+    if (spec.chart_type === 'scatter') {
+      const points = spec.data || [];
+      // 按颜色字段分组（如显著/非显著，或聚类）
+      const groups: Record<string, any[]> = {};
+      const colorField = spec.color_field;
+      points.forEach((p: any) => {
+        const key = colorField ? String(p[colorField] ?? 'default') : 'all';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(p);
+      });
+      const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+      const plotlyData = Object.entries(groups).map(([key, pts], i) => ({
+        type: 'scatter',
+        mode: 'markers',
+        x: pts.map((p) => p[spec.x_field || 'x']),
+        y: pts.map((p) => p[spec.y_field || 'y']),
+        text: pts.map((p) => p[spec.text_field] || p.label || p.gene || ''),
+        name: colorField ? `${key}` : '数据点',
+        marker: { color: colors[i % colors.length], size: 7, opacity: 0.7 },
+      }));
+      return {
+        plotlyData,
+        layout: {
+          ...baseLayout,
+          xaxis: { title: spec.x_label || 'X' },
+          yaxis: { title: spec.y_label || 'Y' },
+        },
+      };
+    }
+
+    if (spec.chart_type === 'bar') {
+      const items = spec.data || [];
+      return {
+        plotlyData: [{
+          type: 'bar',
+          x: items.map((d: any) => d[spec.x_field || 'label']),
+          y: items.map((d: any) => d[spec.y_field || 'value']),
+          text: items.map((d: any) => `p=${(d.pvalue || 0).toFixed(4)}`),
+          marker: { color: '#2563eb' },
+        }],
+        layout: {
+          ...baseLayout,
+          xaxis: { title: spec.x_label || '', tickangle: -30 },
+          yaxis: { title: spec.y_label || '' },
+        },
+      };
+    }
+
+    if (spec.chart_type === 'heatmap') {
+      const hmData = spec.data || {};
+      const genes = hmData.genes || [];
+      const values = hmData.values || [];
+      if (!genes.length || !values.length) return null;
+      return {
+        plotlyData: [{
+          type: 'heatmap',
+          z: values,
+          x: Array.from({ length: values[0]?.length || 0 }, (_, i) => `S${i + 1}`),
+          y: genes,
+          colorscale: 'RdBu_r',
+        }],
+        layout: {
+          ...baseLayout,
+          xaxis: { title: spec.x_label || '样本' },
+          yaxis: { title: spec.y_label || '基因' },
+          height: 450,
+        },
+      };
+    }
+
+    return null;
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-3 border-b sticky top-0 bg-white z-10">
+          <h3 className="font-semibold flex items-center gap-2">
+            <FileBarChart className="w-5 h-5 text-primary-600" /> 专业数据分析报告
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {isLoading ? (
+            <div className="text-center py-16">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mb-3" />
+              <p className="text-gray-600">正在生成专业分析报告...</p>
+              <p className="text-xs text-gray-400 mt-2">执行 4 类生信分析 + LLM 解读，请稍候</p>
+            </div>
+          ) : isError ? (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
+              报告生成失败：{(error as any)?.response?.data?.error?.message || '请稍后重试'}
+            </div>
+          ) : report ? (
+            <>
+              {/* 报告概览 */}
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-100">
+                <h4 className="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+                  <Info className="w-4 h-4" /> 报告概览
+                </h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  <div><span className="text-gray-500">数据集：</span>{report.dataset_name}</div>
+                  <div><span className="text-gray-500">类型：</span>{report.data_type}</div>
+                  <div><span className="text-gray-500">分析完成：</span>{successCount}/4</div>
+                  <div><span className="text-gray-500">模式：</span>{report.use_mock ? 'Mock 演示' : '真实数据'}</div>
+                </div>
+              </div>
+
+              {/* 图表展示 */}
+              {charts.length > 0 && (
+                <div>
+                  <h4 className="font-semibold mb-3 flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4 text-primary-600" /> 可视化图表 ({charts.length})
+                  </h4>
+                  <div className="space-y-4">
+                    {charts.map((chart: any, i: number) => {
+                      const plotly = chartSpecToPlotly(chart);
+                      if (!plotly) return null;
+                      return (
+                        <div key={i} className="bg-gray-50 rounded-lg p-3">
+                          <PlotlyChart data={plotly.plotlyData} layout={plotly.layout} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* LLM 专业解读 */}
+              {llmSummary && (
+                <div>
+                  <h4 className="font-semibold mb-3 flex items-center gap-2">
+                    <Dna className="w-4 h-4 text-primary-600" /> AI 专业解读
+                  </h4>
+                  <div className="bg-gray-50 rounded-lg p-4 prose prose-sm max-w-none">
+                    <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                      {llmSummary}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 分析摘要 */}
+              <div>
+                <h4 className="font-semibold mb-3">分析摘要</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {Object.entries(analyses).map(([type, res]: [string, any]) => (
+                    <div key={type} className="bg-gray-50 rounded-lg p-3">
+                      <div className="font-medium text-sm text-gray-800 mb-1">
+                        {type === 'differential' ? '差异表达分析' :
+                         type === 'clustering' ? '聚类分析' :
+                         type === 'pathway' ? '通路富集' : 'PCA 降维'}
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        {Object.entries(res.summary || {}).map(([k, v]) => (
+                          <div key={k} className="flex justify-between">
+                            <span>{k}:</span>
+                            <span className="font-medium">{typeof v === 'number' ? v.toLocaleString() : String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 错误信息 */}
+              {errors.length > 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                  <div className="text-sm font-medium text-yellow-900 mb-1">部分分析跳过</div>
+                  <ul className="text-xs text-yellow-700 space-y-1">
+                    {errors.map((e: string, i: number) => (
+                      <li key={i}>• {e}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          ) : null}
         </div>
       </div>
     </div>

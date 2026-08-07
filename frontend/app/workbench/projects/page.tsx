@@ -1,9 +1,10 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { FolderKanban, Plus, Trash2, Archive, Play, Pause } from 'lucide-react';
-import { getProjects, createProject } from '@/lib/api';
+import { toast } from '@/lib/notification';
+import { getProjects, createProject, archiveProject } from '@/lib/api';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
@@ -46,8 +47,16 @@ export default function ProjectsPage() {
       setNewProject({ name: '', description: '', cancer_type: '', stage: '', patient_pseudonym: '' });
     },
   });
-
-  const projectList: any[] = Array.isArray(projects) ? projects : (projects as any)?.data || [];
+  const archiveMutation = useMutation({
+    mutationFn: (projectId: string) => archiveProject(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('项目已归档');
+    },
+    onError: (err: any) => {
+      toast.error('归档失败', { description: err?.response?.data?.detail || '请稍后重试' });
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -70,7 +79,7 @@ export default function ProjectsPage() {
         </div>
       ) : isLoading ? (
         <Card className="p-8 text-center text-gray-500">加载中...</Card>
-      ) : projectList.length === 0 ? (
+      ) : projects.length === 0 ? (
         <Card className="p-8 text-center text-gray-500">
           <FolderKanban className="w-12 h-12 mx-auto mb-4 text-gray-300" />
           <p>暂无项目</p>
@@ -78,7 +87,7 @@ export default function ProjectsPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projectList.map((project: any) => (
+          {projects.map((project: any) => (
             <Card key={project.id} className="p-5">
               <div className="flex items-start justify-between mb-3">
                 <h3 className="font-semibold truncate">{project.name}</h3>
@@ -111,7 +120,7 @@ export default function ProjectsPage() {
                   </Button>
                 )}
                 {project.status !== 'archived' && (
-                  <Button variant="secondary" size="sm">
+                  <Button variant="secondary" size="sm" onClick={() => archiveMutation.mutate(project.id)}>
                     <Archive className="w-3 h-3" /> 归档
                   </Button>
                 )}

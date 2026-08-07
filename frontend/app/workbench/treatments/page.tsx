@@ -11,6 +11,8 @@ import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import PlotlyChart from '@/components/charts/PlotlyChart';
+import { ClinicalFeedbackModal } from '@/components/treatments/ClinicalFeedbackModal';
+import AIInsightBanner from '@/components/coscientist/AIInsightBanner';
 
 export default function TreatmentsPage() {
   const { currentProject } = useAppStore();
@@ -120,6 +122,8 @@ export default function TreatmentsPage() {
           <Zap className="w-4 h-4" /> 优化组合
         </Button>
       </div>
+
+      <AIInsightBanner entityType="treatment" projectId={currentProject?.id} />
 
       {/* DDI 药物相互作用检查 */}
       <Card title="药物相互作用（DDI）检查">

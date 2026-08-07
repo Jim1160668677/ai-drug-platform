@@ -242,11 +242,11 @@ class TestNotFoundContract:
         已在 TestUnregisteredPathContract 中记录。
         """
         resp = await client.get(path)
-        # 部分端点可能返回 404 或 400（取决于 ID 格式校验），接受两者但验证契约
-        assert resp.status_code in (404, 400), f"{path} 期望 404/400，实际 {resp.status_code}"
+        # 部分端点返回 404/400/422（取决于 ID 格式校验），接受所有客户端错误并验证契约
+        assert resp.status_code in (404, 400, 422), f"{path} 期望 404/400/422，实际 {resp.status_code}"
         body = resp.json()
         assert _is_error_envelope(body), f"{path} 响应不符合 ErrorResponse 契约: {body}"
-        # 错误码应为 NOT_FOUND 或 VALIDATION_ERROR
+        # 错误码应为 NOT_FOUND 或 VALIDATION_ERROR（422 时由 Pydantic 校验触发）
         assert body["error"]["code"] in ("NOT_FOUND", "VALIDATION_ERROR")
         assert "X-Request-ID" in resp.headers
         assert body["meta"]["request_id"] == resp.headers["X-Request-ID"]

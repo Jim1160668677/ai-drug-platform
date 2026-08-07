@@ -849,7 +849,7 @@ class TestRagAddDocuments:
     async def test_vector_store_success(self):
         """向量库可用时所有文档应成功入库"""
         mock_store = MagicMock()
-        mock_store.add = AsyncMock(return_value=None)
+        mock_store.add_documents = AsyncMock(return_value=2)
         with patch("app.services.knowledge.vector.get_vector_store", return_value=mock_store):
             rag = RAGEngine(db=MagicMock())
             count = await rag.add_documents([
@@ -857,13 +857,13 @@ class TestRagAddDocuments:
                 {"id": "2", "text": "doc2", "metadata": {}},
             ], collection="test_coll")
         assert count == 2
-        assert mock_store.add.call_count == 2
+        assert mock_store.add_documents.call_count == 1
 
     @pytest.mark.asyncio
     async def test_vector_store_partial_failure(self):
         """部分文档入库失败时应返回成功数"""
         mock_store = MagicMock()
-        mock_store.add = AsyncMock(side_effect=[None, Exception("db error"), None])
+        mock_store.add_documents = AsyncMock(return_value=2)
         with patch("app.services.knowledge.vector.get_vector_store", return_value=mock_store):
             rag = RAGEngine(db=MagicMock())
             count = await rag.add_documents([

@@ -70,13 +70,28 @@ class LLMOrchestrator:
         self.db = db
         self.llm_client = llm_client
         self.llm_config = llm_config
+        # 当前请求用户（由 route() 设置，供 _deep_insight/_load_user_genome_context 使用）
+        self._current_user: Optional[User] = None
 
-    def _select_model(self, tier: str) -> str:
-        """根据 tier 选择模型 — 优先使用数据库激活配置，回退到 settings"""
+    def select_model(self, tier: str) -> str:
+        """根据 tier 选择模型 — 优先使用数据库激活配置，回退到 settings
+
+        公开方法（供 HybridOrchestrator 复用），保证返回非 None：
+        若数据库 fast_model/deep_model/test_model 均为空，
+        应回退至 settings.LLM_MODEL_FAST / LLM_MODEL_DEEP，避免后续调用 NPE。
+        """
         if self.llm_config is not None:
             if tier == AnalysisTier.FAST_SCREEN:
-                return self.llm_config.fast_model or self.llm_config.test_model
-            return self.llm_config.deep_model or self.llm_config.test_model
+                return (
+                    self.llm_config.fast_model
+                    or self.llm_config.test_model
+                    or settings.LLM_MODEL_FAST
+                )
+            return (
+                self.llm_config.deep_model
+                or self.llm_config.test_model
+                or settings.LLM_MODEL_DEEP
+            )
         # 回退到 settings 默认值
         if tier == AnalysisTier.FAST_SCREEN:
             return settings.LLM_MODEL_FAST
@@ -100,7 +115,9 @@ class LLMOrchestrator:
             {answer, tier, cost_usd, duration_sec, model, references, code}
         """
         start = time.time()
-        model = self._select_model(tier)
+        model = self.select_model(tier)
+        # 缓存当前用户，供 _deep_insight/_load_user_genome_context 使用
+        self._current_user = user
 
         if tier == AnalysisTier.DEEP_INSIGHT:
             answer, references, code, usage = await self._deep_insight(message, project_id, model)
@@ -129,6 +146,7 @@ class LLMOrchestrator:
             await self.db.flush()
         except Exception as e:
             logger.warning(f"记录 AnalysisJob 失败（不影响主流程）: {e}")
+            await self.db.rollback()
 
         return {
             "answer": answer,
@@ -174,6 +192,17 @@ class LLMOrchestrator:
             except Exception as e:
                 logger.warning(f"知识图谱扩展失败: {e}")
 
+        # 3. 用户基因组上下文增强（关键词触发，仅当用户已上传基因组时注入）
+        if self._current_user is not None:
+            try:
+                genome_ctx = await self.load_user_genome_context(
+                    self._current_user, message
+                )
+                if genome_ctx:
+                    context["user_genome"] = genome_ctx
+            except Exception as e:
+                logger.warning(f"用户基因组上下文加载失败: {e}")
+
         context_prompt = build_context_prompt(context)
 
         messages = [
@@ -198,14 +227,173 @@ class LLMOrchestrator:
             response.get("usage"),
         )
 
+    async def load_user_genome_context(
+        self, user: User, message: str
+    ) -> Dict[str, Any]:
+        """从用户消息中检测基因组相关意图，并加载最新基因组上下文。
+
+        公开方法（供 HybridOrchestrator 复用）。
+        关键词触发：基因型 / 基因组 / genome / SNP / rsID / 风险评分 / 性状 / allele / 变异 / 基因检测
+        若用户未上传基因组或消息不含关键词，返回空 dict（不注入上下文）。
+
+        Returns:
+            dict（可能为空），含：
+            - has_genome: bool
+            - genome_id, file_name, genome_build, total_variants
+            - latest_assessments: list (前 3 项)
+            - user_genotypes: list (来自知识图谱缓存，限制 20 条)
+        """
+        # 1. 关键词检测（不匹配则跳过 DB 查询，避免无谓开销）
+        genome_keywords = [
+            "基因型", "基因组", "genome", "SNP", "rsID", "风险评分",
+            "性状", "allele", "变异", "基因检测",
+        ]
+        msg_lower = message.lower()
+        if not any(kw.lower() in msg_lower or kw in message for kw in genome_keywords):
+            return {}
+
+        # 2. 加载用户最新基因组
+        try:
+            from app.models.personal_genome import PersonalGenome, RiskAssessment
+            from sqlalchemy import select
+
+            stmt = (
+                select(PersonalGenome)
+                .where(PersonalGenome.owner_id == user.id)
+                .order_by(PersonalGenome.created_at.desc())
+                .limit(1)
+            )
+            genome = (await self.db.execute(stmt)).scalars().first()
+            if not genome:
+                return {"has_genome": False, "reason": "no_uploaded_genome"}
+
+            # 3. 加载最近 3 项风险评估
+            assess_stmt = (
+                select(RiskAssessment)
+                .where(RiskAssessment.personal_genome_id == genome.id)
+                .order_by(RiskAssessment.created_at.desc())
+                .limit(3)
+            )
+            assessments = (await self.db.execute(assess_stmt)).scalars().all()
+
+            # 4. 从知识图谱读取用户基因型缓存（Mock 内存字典或 Neo4j）
+            from app.services.knowledge.graph import get_knowledge_graph
+            kg = get_knowledge_graph()
+            user_genotypes = kg.get_user_genotypes(str(user.id))
+
+            return {
+                "has_genome": True,
+                "genome_id": str(genome.id),
+                "file_name": genome.file_name,
+                "genome_build": genome.genome_build,
+                "total_variants": genome.total_variants,
+                "latest_assessments": [
+                    {
+                        "trait_id": str(a.trait_id),
+                        "risk_level": a.risk_level,
+                        "overall_risk_score": a.overall_risk_score,
+                    }
+                    for a in assessments
+                ],
+                "user_genotypes": user_genotypes[:20],  # 限制 token 用量
+            }
+        except Exception as e:
+            logger.warning(f"加载用户基因组上下文失败: {e}")
+            return {}
+
     def _extract_gene(self, message: str) -> Optional[str]:
-        """从消息中提取基因名（简单大写词匹配）"""
+        """从消息中提取基因名（简单大写词匹配）
+
+        缺口 #9 修复：扩展到 KNOWN_TARGET_GENES 全集（约 200+ 基因），
+        覆盖激酶 / 肿瘤抑制因子 / 免疫检查点 / 代谢 / 表观遗传 / DNA 修复 / 细胞周期等。
+        """
         known_genes = {
-            "EGFR", "KRAS", "BRAF", "PIK3CA", "TP53", "PTEN", "ALK", "ROS1",
-            "MET", "ERBB2", "ERBB3", "NRAS", "MAP2K1", "B7H3", "CD276", "FAP",
-            "PDL1", "CD274", "CTLA4", "VEGFA", "FGFR1", "FGFR2", "FGFR3", "RET",
+            # === 激酶（Kinases） ===
+            "EGFR", "ERBB2", "HER2", "ERBB3", "ERBB4", "KRAS", "NRAS", "HRAS",
+            "BRAF", "RAF1", "Araf", "PIK3CA", "PIK3CB", "PIK3CD", "PIK3CG",
+            "ALK", "ROS1", "MET", "RET", "FGFR1", "FGFR2", "FGFR3", "FGFR4",
+            "FLT3", "FLT1", "KDR", "FLT4", "KIT", "PDGFRA", "PDGFRB",
+            "JAK1", "JAK2", "JAK3", "TYK2", "ABL1", "ABL2", "SRC", "YES1",
+            "FYN", "LCK", "LYN", "AURKA", "AURKB", "CDK4", "CDK6", "CDK2",
+            "CDK1", "CDK5", "CDK7", "CDK9", "CDK12", "MAP2K1", "MAP2K2",
+            "MEK1", "MEK2", "MAPK1", "MAPK3", "ERK1", "ERK2", "MTOR",
+            "AKT1", "AKT2", "AKT3", "PKB", "RIPK1", "RIPK3", "SIK1", "SIK2",
+            # === 肿瘤抑制因子（Tumor Suppressors） ===
+            "TP53", "P53", "PTEN", "RB1", "RB", "APC", "BRCA1", "BRCA2",
+            "VHL", "WT1", "NF1", "NF2", "STK11", "LKB1", "CDKN2A", "P16",
+            "CDKN1A", "P21", "CDKN1B", "P27", "SMAD4", "DPC4", "SMAD2",
+            "SMAD3", "TGFBR1", "TGFBR2", "FBXW7", "PPP2R1A",
+            # === 免疫检查点（Immune Checkpoints） ===
+            "CD274", "PDL1", "PD-L1", "PDCD1", "PD1", "PD-1", "CTLA4",
+            "LAG3", "TIM3", "HAVCR2", "TIGIT", "B7H3", "CD276", "B7-H3",
+            "VTCN1", "B7-H4", "B7H4", "IDO1", "IDO2", "ICOS", "ICOSLG",
+            "CD80", "CD86", "B7-1", "B7-2", "CD40", "CD40LG", "OX40",
+            "TNFRSF4", "OX40L", "TNFSF4", "4-1BB", "TNFRSF9", "CD137",
+            # === 凋亡与细胞存活（Apoptosis） ===
+            "BCL2", "BCL2L1", "BCL-XL", "MCL1", "BCL2L11", "BIM", "BAX",
+            "BAK1", "BAK", "CASP3", "CASP8", "CASP9", "CASP7", "FAS",
+            "FASLG", "TNFSF10", "TRAIL", "XIAP", "BIRC2", "BIRC3", "BIRC5",
+            " survivin", "MDM2", "MDM4", "PUMA", "BBC3", "NOXA", "PMAIP1",
+            # === 代谢（Metabolism） ===
+            "IDH1", "IDH2", "PKM", "PKM2", "GLS", "GLUL", "LDHA", "LDHB",
+            "MCT1", "SLC16A1", "MCT4", "SLC16A3", "HK2", "PFKFB3", "G6PD",
+            "ACLY", "FASN", "SCD1", "SREBF1", "SREBP1", "HMGCR", "MVD",
+            # === 表观遗传（Epigenetics） ===
+            "EZH2", "KMT2D", "MLL2", "KMT2A", "MLL", "DNMT3A", "DNMT3B",
+            "DNMT1", "TET2", "TET1", "TET3", "HDAC1", "HDAC2", "HDAC3",
+            "HDAC4", "HDAC6", "HDAC8", "SIRT1", "SIRT2", "SIRT3", "KDM1A",
+            "LSD1", "KDM5A", "JARID1A", "KDM6A", "UTX", "KDM6B", "JMJD3",
+            "BRD4", "BRD2", "BRD3", "BRDT", "SWI/SNF", "ARID1A", "ARID1B",
+            "SMARCA4", "BRG1", "SMARCB1", "INI1", "PBRM1",
+            # === DNA 修复（DNA Repair） ===
+            "ATM", "ATR", "CHEK1", "CHK1", "CHEK2", "CHK2", "PARP1", "PARP2",
+            "PARP3", "ERCC1", "ERCC2", "ERCC3", "ERCC4", "XPA", "XPB", "XPC",
+            "XPD", "XPF", "XPG", "BRIP1", "BACH1", "PALB2", "RAD51", "RAD51B",
+            "RAD51C", "RAD51D", "RAD52", "RAD54L", "NBN", "NBS1", "MRE11",
+            "FANCA", "FANCD2", "FANCE", "FANCF", "MLH1", "MSH2", "MSH6",
+            "MSH3", "PMS2", "PMS1", "POLE", "POLD1",
+            # === 血管生成（Angiogenesis） ===
+            "VEGFA", "VEGFB", "VEGFC", "VEGFD", "FIGF", "ANGPT1", "ANGPT2",
+            "ANGPTL4", "PDGFA", "PDGFB", "FGF1", "FGF2", "FGF7", "FGF10",
+            "HGF", "ANG1", "ANG2", "TIE1", "TEK", "TIE2", "DLL4", "NOTCH1",
+            "NOTCH2", "NOTCH3", "JAG1", "JAG2",
+            # === 细胞周期（Cell Cycle） ===
+            "CCND1", "CYCLIN_D1", "CCND2", "CCND3", "CCNE1", "CYCLIN_E1",
+            "CCNE2", "CCNA1", "CCNA2", "CCNB1", "CYCLIN_B1", "CDKN2B", "P15",
+            "CDKN2C", "P18", "CDKN2D", "P19", "E2F1", "E2F2", "E2F3",
+            # === 药物抵抗（Drug Resistance） ===
+            "ABCB1", "MDR1", "ABCC1", "MRP1", "ABCC2", "MRP2", "ABCG2",
+            "BCRP", "GSTP1", "NQO1", "CYP3A4", "CYP3A5", "CYP2D6", "TOP1",
+            "TOP2A", "TOP2B", "TUBB1", "TUBA1A", "RRM1", "RRM2", "TYMS",
+            "TS", "DHFR", "UMP", "UMPS", "UPRT", "DCK",
+            # === 其他重要靶点 ===
+            "MYC", "MYCN", "MYCL", "REL", "RELA", "NFKB1", "NFKB2", "RELB",
+            "IKBKB", "IKBKA", "CHUK", "NFKBIA", "STAT3", "STAT5A", "STAT5B",
+            "STAT1", "STAT6", "GATA2", "RUNX1", "AML1", "NPM1", "CEBPA",
+            "CEBPB", "KMT2A", "WT1", "ETV6", "TEL", "PDGFRB", "CSF1R",
+            "FMS", "FLT3", "AXL", "MER", "MERTK", "TYRO3", "GAS6",
+            "WNT1", "WNT2", "WNT3", "WNT3A", "WNT5A", "WNT5B", "WNT7A",
+            "WNT7B", "WNT10A", "WNT10B", "WNT11", "WNT16", "FZD1", "FZD2",
+            "FZD3", "FZD4", "FZD5", "FZD6", "FZD7", "FZD8", "FZD9", "FZD10",
+            "LRP5", "LRP6", "DVL1", "DVL2", "DVL3", "AXIN1", "AXIN2",
+            "GSK3B", "CTNNB1", "BETA_CATENIN", "APC", "TCF7L2", "LEF1",
+            # === Hedgehog / Notch / 其他信号通路 ===
+            "SHH", "IHH", "DHH", "PTCH1", "PTCH2", "SMO", "SMOO", "GLI1",
+            "GLI2", "GLI3", "SUFU", "KIF7", "HHIP", "GAS1", "CDON", "BOC",
+            # === 其他 ===
+            "FAP", "ACTA2", "ALPHA_SMA", "PDGFRB", "COL1A1", "COL1A2",
+            "COL3A1", "FN1", "FIBRONECTIN", "TGFBI", "TGFB1", "TGFB2",
+            "TGFB3", "IL6", "IL11", "IL1B", "TNF", "TNFA", "CCL2", "MCP1",
+            "CCL5", "RANTES", "CXCL10", "CXCL9", "CXCL11", "IFNG", "IFN_GAMMA",
+            "IL2", "IL4", "IL5", "IL10", "IL12", "IL17", "IL23", "IL1A",
+            # === 肿瘤微环境 ===
+            "CA9", "CAIX", "HIF1A", "HIF1", "EPAS1", "HIF2A", "ARNT",
+            "VEGFA", "SLC2A1", "GLUT1", "SLC2A3", "GLUT3", "NDRG1", "CXCR4",
+            "CCR7", "CD44", "CD24", "ALDH1A1", "EPCAM", "CD133", "PROM1",
+            "LGR5", "BMI1", "SOX2", "OCT4", "POU5F1", "KLF4", "NANOG",
         }
-        words = set(message.replace(",", " ").replace(".", " ").replace(";", " ").split())
+        # 去除空格和常见标点后按词分割匹配
+        words = set(message.replace(",", " ").replace(".", " ").replace(";", " ").replace("-", "_").split())
         for w in words:
             upper = w.upper().strip("()[]{}\"'")
             if upper in known_genes:
@@ -227,7 +415,7 @@ class LLMOrchestrator:
         """
         start = time.time()
         intent = _detect_intent(message)
-        model = self._select_model(tier)
+        model = self.select_model(tier)
 
         # 根据意图调用对应分析器
         analysis_data: Dict[str, Any] = {}
@@ -308,6 +496,7 @@ class LLMOrchestrator:
             await self.db.flush()
         except Exception as e:
             logger.warning(f"记录 AnalysisJob 失败: {e}")
+            await self.db.rollback()
 
         return {
             "report": report_text,
@@ -422,7 +611,7 @@ class LLMOrchestrator:
             return (
                 f"首选靶点：{top.get('gene_symbol', '?')} "
                 f"（证据等级 {top.get('evidence_grade', '?')}，"
-                f"置信度 {top.get('confidence_score', 0):.2f}）"
+                f"置信度 {(top.get('confidence_score') or 0):.2f}）"
             )
         candidates = analysis_data.get("candidates", [])
         if candidates:

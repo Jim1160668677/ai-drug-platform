@@ -1,5 +1,6 @@
 """疗效监测器 — P3 实时流式监测"""
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -23,7 +24,7 @@ class EfficacyMonitor:
         self.db = db
 
     async def check(self, treatment_id: UUID) -> Dict[str, Any]:
-        """检查治疗方案疗效
+        """检查治疗方案疗效（整合实验结果 + 持久化监测数据）
 
         Args:
             treatment_id: 治疗方案 ID
@@ -43,6 +44,7 @@ class EfficacyMonitor:
         # 汇总疗效指标
         efficacy_scores: List[float] = []
         adverse_events: List[str] = []
+        recist_responses: List[str] = []
 
         for exp in experiments:
             result = exp.result or {}
@@ -56,16 +58,37 @@ class EfficacyMonitor:
                     efficacy_scores.append(float(result["inhibition_rate"]) / 100)
                 except (ValueError, TypeError):
                     pass
+            if result.get("response"):
+                recist_responses.append(result["response"])
             for ae in result.get("adverse_events", []) or []:
                 adverse_events.append(str(ae))
             if not exp.success and exp.status == ExperimentStatus.COMPLETED:
                 adverse_events.append(f"实验未达预期: {exp.name}")
+
+        # 合并持久化监测数据
+        monitoring = treatment.monitoring_data or {}
+        for outcome in monitoring.get("outcomes", []) or []:
+            if outcome.get("response"):
+                recist_responses.append(outcome["response"])
+            if outcome.get("efficacy") is not None:
+                try:
+                    efficacy_scores.append(float(outcome["efficacy"]))
+                except (ValueError, TypeError):
+                    pass
+        for ae in monitoring.get("adverse_events", []) or []:
+            symptom = ae.get("symptom")
+            if symptom:
+                adverse_events.append(f"{symptom} (CTCAE {ae.get('ctcae_grade', '?')}级)")
 
         # 计算当前疗效
         current_efficacy = sum(efficacy_scores) / len(efficacy_scores) if efficacy_scores else 0
 
         # 趋势分析
         trend = self._analyze_trend(efficacy_scores)
+
+        # RECIST 汇总
+        orr_info = self._compute_orr(recist_responses)
+        dcr_info = self._compute_dcr(recist_responses)
 
         # 推荐
         recommendation = self._recommend(current_efficacy, trend, adverse_events)
@@ -76,9 +99,24 @@ class EfficacyMonitor:
             "current_efficacy": round(current_efficacy, 3),
             "trend": trend,
             "adverse_events": adverse_events[:10],
+            "adverse_events_count": len(adverse_events),
             "recommendation": recommendation,
             "experiments_count": len(experiments),
             "efficacy_history": efficacy_scores,
+            "recist_summary": {
+                "responses": recist_responses,
+                "orr": orr_info["orr"],
+                "dcr": dcr_info["dcr"],
+                "cr": orr_info["cr"],
+                "pr": orr_info["pr"],
+                "sd": dcr_info["sd"],
+                "pd": dcr_info["pd"],
+            },
+            "monitoring_records": {
+                "outcomes": len(monitoring.get("outcomes", [])),
+                "adverse_events": len(monitoring.get("adverse_events", [])),
+                "last_updated": monitoring.get("last_updated"),
+            },
             "method": "batch_aggregation",
             "note": "P3 启用 Kafka 后将支持实时流式监测",
         }
@@ -237,21 +275,57 @@ class EfficacyMonitor:
         treatment_id: UUID,
         outcome: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """记录疗效结局
+        """记录疗效结局（持久化到 Treatment.monitoring_data）
 
         Args:
             treatment_id: 治疗方案 ID
             outcome: {"response", "lesions", "time", "event"}
         Returns:
-            {treatment_id, response, recorded_at}
+            {treatment_id, response, recorded_at, outcome_id}
         """
+        treatment = await self.db.get(Treatment, treatment_id)
+        if not treatment:
+            return {"error": "治疗方案不存在", "treatment_id": str(treatment_id)}
+
         response = outcome.get("response")
         if not response and outcome.get("lesions"):
             response = self._recist_classify(outcome["lesions"])
+
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        record = {
+            "id": str(UUID(int=len((treatment.monitoring_data or {}).get("outcomes", [])))),
+            "response": response,
+            "lesions": outcome.get("lesions"),
+            "time": outcome.get("time"),
+            "event": outcome.get("event"),
+            "recorded_at": recorded_at,
+        }
+
+        # 持久化到 monitoring_data.outcomes 列表
+        monitoring = treatment.monitoring_data or {}
+        outcomes_list = monitoring.get("outcomes", [])
+        outcomes_list.append(record)
+        monitoring["outcomes"] = outcomes_list
+        # 更新汇总统计
+        all_responses = [o.get("response") for o in outcomes_list if o.get("response")]
+        monitoring["orr"] = self._compute_orr(all_responses)
+        monitoring["dcr"] = self._compute_dcr(all_responses)
+        monitoring["last_updated"] = recorded_at
+        treatment.monitoring_data = monitoring
+
+        await self.db.flush()
+        logger.info(
+            "记录疗效结局: treatment=%s response=%s (累计 %d 条)",
+            treatment_id, response, len(outcomes_list),
+        )
+
         return {
             "treatment_id": str(treatment_id),
             "response": response,
             "recorded": True,
+            "recorded_at": recorded_at,
+            "outcome_id": record["id"],
+            "total_outcomes": len(outcomes_list),
         }
 
     async def record_adverse_event(
@@ -259,20 +333,52 @@ class EfficacyMonitor:
         treatment_id: UUID,
         event: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """记录不良事件
+        """记录不良事件（持久化到 Treatment.monitoring_data）
 
         Args:
             treatment_id: 治疗方案 ID
             event: {"symptom", "severity", "description"}
         Returns:
-            {treatment_id, ctcae_grade, recorded}
+            {treatment_id, ctcae_grade, symptom, recorded_at, total_ae}
         """
+        treatment = await self.db.get(Treatment, treatment_id)
+        if not treatment:
+            return {"error": "治疗方案不存在", "treatment_id": str(treatment_id)}
+
         grade = self._grade_adverse_event(event)
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        record = {
+            "symptom": event.get("symptom"),
+            "severity": event.get("severity"),
+            "description": event.get("description"),
+            "ctcae_grade": grade,
+            "recorded_at": recorded_at,
+        }
+
+        # 持久化到 monitoring_data.adverse_events 列表
+        monitoring = treatment.monitoring_data or {}
+        ae_list = monitoring.get("adverse_events", [])
+        ae_list.append(record)
+        monitoring["adverse_events"] = ae_list
+        # 更新 AE 分级分布
+        all_grades = [ae.get("ctcae_grade", 1) for ae in ae_list]
+        monitoring["ae_distribution"] = {str(i): all_grades.count(i) for i in range(1, 6)}
+        monitoring["last_updated"] = recorded_at
+        treatment.monitoring_data = monitoring
+
+        await self.db.flush()
+        logger.info(
+            "记录不良事件: treatment=%s grade=%d symptom=%s (累计 %d 条)",
+            treatment_id, grade, event.get("symptom"), len(ae_list),
+        )
+
         return {
             "treatment_id": str(treatment_id),
             "ctcae_grade": grade,
             "symptom": event.get("symptom"),
             "recorded": True,
+            "recorded_at": recorded_at,
+            "total_adverse_events": len(ae_list),
         }
 
     async def global_summary(self, project_id: Optional[UUID] = None) -> Dict[str, Any]:
@@ -281,7 +387,8 @@ class EfficacyMonitor:
         Args:
             project_id: 项目 ID（可选，限定范围）
         Returns:
-            {total_treatments, total_outcomes, orr, dcr, ae_distribution}
+            {total_treatments, total_outcomes, overall_orr, overall_dcr,
+             median_pfs_days, median_os_days, ae_distribution, by_target, records}
         """
         stmt = select(Treatment)
         if project_id:
@@ -289,28 +396,111 @@ class EfficacyMonitor:
         treatments = (await self.db.execute(stmt)).scalars().all()
 
         # 收集所有实验结果中的响应
-        all_responses = []
-        all_aes = []
+        all_responses: List[str] = []
+        all_aes: List[int] = []
+        # 按靶点分组
+        by_target: Dict[str, Dict[str, Any]] = {}
+        # 记录列表（用于前端展示）
+        records: List[Dict[str, Any]] = []
+        # 生存时间样本（用于估算中位 PFS / OS）
+        pfs_samples: List[float] = []
+        os_samples: List[float] = []
+
         for t in treatments:
             exps = (await self.db.execute(
                 select(Experiment).where(Experiment.treatment_id == t.id)
+                .order_by(Experiment.created_at.asc())
             )).scalars().all()
+            target_key = (
+                getattr(t, "target_name", None)
+                or getattr(t, "name", None)
+                or f"treatment-{str(t.id)[:8]}"
+            )
+            target_bucket = by_target.setdefault(
+                target_key, {"count": 0, "responses": [], "aes": 0}
+            )
             for exp in exps:
                 result = exp.result or {}
-                if result.get("response"):
-                    all_responses.append(result["response"])
-                for ae in result.get("adverse_events", []) or []:
+                response = result.get("response")
+                if response:
+                    all_responses.append(response)
+                    target_bucket["responses"].append(response)
+                # 收集不良事件
+                ae_list = result.get("adverse_events", []) or []
+                for ae in ae_list:
                     grade = self._grade_adverse_event(ae if isinstance(ae, dict) else {"severity": ae})
                     all_aes.append(grade)
+                    target_bucket["aes"] += 1
+                # 生存时间样本
+                if result.get("pfs_days") is not None:
+                    try:
+                        pfs_samples.append(float(result["pfs_days"]))
+                    except (ValueError, TypeError):
+                        pass
+                if result.get("os_days") is not None:
+                    try:
+                        os_samples.append(float(result["os_days"]))
+                    except (ValueError, TypeError):
+                        pass
+                # 构造记录条目
+                follow_up_days = result.get("follow_up_days") or result.get("time") or result.get("days")
+                records.append({
+                    "id": str(exp.id),
+                    "treatment_id": str(t.id),
+                    "treatment_name": getattr(t, "name", None),
+                    "target_name": target_key if target_key != f"treatment-{str(t.id)[:8]}" else None,
+                    "recist_response": response,
+                    "follow_up_days": follow_up_days,
+                    "adverse_events": ae_list if isinstance(ae_list, list) else [],
+                    "created_at": exp.created_at.isoformat() if exp.created_at else None,
+                })
 
-        orr = self._compute_orr(all_responses)
-        dcr = self._compute_dcr(all_responses)
+        orr_info = self._compute_orr(all_responses)
+        dcr_info = self._compute_dcr(all_responses)
         ae_dist = {str(i): all_aes.count(i) for i in range(1, 6)}
+
+        # 顶层标量化（前端方便直接展示）
+        overall_orr = orr_info["orr"]
+        overall_dcr = dcr_info["dcr"]
+
+        # 中位 PFS / OS（简化为样本中位数）
+        median_pfs_days = self._median(pfs_samples) if pfs_samples else None
+        median_os_days = self._median(os_samples) if os_samples else None
+
+        # 按靶点汇总 ORR/DCR
+        by_target_summary: Dict[str, Any] = {}
+        for target, bucket in by_target.items():
+            t_orr = self._compute_orr(bucket["responses"])
+            t_dcr = self._compute_dcr(bucket["responses"])
+            by_target_summary[target] = {
+                "count": bucket["count"] + len(bucket["responses"]),
+                "orr": t_orr["orr"],
+                "dcr": t_dcr["dcr"],
+                "ae_count": bucket["aes"],
+            }
 
         return {
             "total_treatments": len(treatments),
             "total_outcomes": len(all_responses),
-            "orr": orr,
-            "dcr": dcr,
+            "orr": orr_info,
+            "dcr": dcr_info,
+            "overall_orr": overall_orr,
+            "overall_dcr": overall_dcr,
+            "median_pfs_days": median_pfs_days,
+            "median_os_days": median_os_days,
             "ae_distribution": ae_dist,
+            "by_target": by_target_summary,
+            "records": records,
         }
+
+    @staticmethod
+    def _median(values: List[float]) -> Optional[float]:
+        """计算中位数"""
+        if not values:
+            return None
+        sorted_vals = sorted(values)
+        n = len(sorted_vals)
+        mid = n // 2
+        if n % 2 == 1:
+            return sorted_vals[mid]
+        return round((sorted_vals[mid - 1] + sorted_vals[mid]) / 2, 2)

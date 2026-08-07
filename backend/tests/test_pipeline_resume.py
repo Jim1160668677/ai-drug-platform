@@ -34,7 +34,7 @@ from app.models.base import Base  # noqa: E402
 from app.models import (  # noqa: E402, F401
     user, project, dataset, target, molecule,
     treatment, hypothesis, experiment, audit, analysis_job, workflow_run,
-    llm_config,
+    llm_config, pipeline_run,
 )
 from app.services.orchestrator.discovery_pipeline import (
     DiscoveryPipeline,

@@ -4,9 +4,22 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     auth, projects, data, targets, molecules, treatments,
     hypotheses, experiments, workflows, reports,
-    knowledge, chat, audit, dashboard, llm_config, users,
+    knowledge, chat, audit, dashboard, llm_config, users, user_llm,
     feedback, federated, privacy, efficacy, ws,
     pipeline, lineage, consent,
+    agent, sandbox, genome,
+    organizations,
+    translations,
+    validations,
+    # 计算引擎与合成模块
+    structures, docking, cells, screening, benchmarks, synthesis,
+    # 模型切换监控
+    model_switch,
+    # Co-Scientist 多智能体科学推理
+    coscientist,
+    coscientist_insights,
+    # 统一智能系统（融合 AI 问答/科学推理/Agent/多模态/规则引擎）
+    intelligence,
 )
 
 api_router = APIRouter()
@@ -28,6 +41,8 @@ api_router.include_router(audit.router, prefix="/audit", tags=["审计日志"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["全局看板"])
 api_router.include_router(llm_config.router, prefix="/llm-configs", tags=["LLM 配置"])
 api_router.include_router(users.router, prefix="/users", tags=["用户管理"])
+api_router.include_router(user_llm.router, prefix="/users/me/llm-configs", tags=["用户 LLM 配置"])
+api_router.include_router(genome.router, prefix="/genome", tags=["个人基因组解读"])
 
 # P1.3 新增端点
 api_router.include_router(feedback.router, prefix="/feedback", tags=["反馈协作"])
@@ -44,6 +59,38 @@ api_router.include_router(lineage.router, prefix="/lineage", tags=["数据血缘
 
 # 知情同意
 api_router.include_router(consent.router, prefix="/consent", tags=["知情同意"])
+
+# Agent 工作台（ReAct 引擎 + 工具调用 + WS 推送）
+api_router.include_router(agent.router, prefix="/agent", tags=["Agent"])
+api_router.include_router(sandbox.router, prefix="/sandbox", tags=["代码沙箱"])
+
+# 机构与职能维度
+api_router.include_router(organizations.router, prefix="/organizations", tags=["机构与职能"])
+
+# 合作方与转化路径
+api_router.include_router(translations.router, prefix="/translations", tags=["合作方与转化路径"])
+
+# 干湿闭环验证
+api_router.include_router(validations.router, prefix="/validations", tags=["干湿闭环验证"])
+
+# 计算引擎与合成模块（新闻洞察与混合架构）
+api_router.include_router(structures.router, prefix="/structures", tags=["蛋白结构"])
+api_router.include_router(docking.router, prefix="/docking", tags=["分子对接"])
+api_router.include_router(cells.router, prefix="/cells", tags=["单细胞分析"])
+api_router.include_router(screening.router, prefix="/screening", tags=["双上下文筛选"])
+api_router.include_router(benchmarks.router, prefix="/benchmarks", tags=["基准评测"])
+api_router.include_router(synthesis.router, prefix="/synthesis", tags=["合成规划"])
+
+# 模型切换监控（智谱 GLM 降级链路）
+api_router.include_router(model_switch.router, prefix="/model-switch", tags=["模型切换监控"])
+
+# Co-Scientist 多智能体科学推理引擎
+api_router.include_router(coscientist.router, prefix="/coscientist", tags=["Co-Scientist"])
+# Co-Scientist 洞察管理（嵌入式协作层）— 与 coscientist 共用前缀
+api_router.include_router(coscientist_insights.router, prefix="/coscientist", tags=["Co-Scientist"])
+
+# 统一智能系统（融合 AI 问答 / 科学推理 / Agent / 多模态 / 规则引擎，22 端点）
+api_router.include_router(intelligence.router, prefix="/intelligence", tags=["统一智能系统"])
 
 # 路径别名 — 旧前端兼容（保留 1 版本周期，include_in_schema=False 避免文档重复）
 api_router.include_router(data.router, prefix="/datasets", tags=["数据接入"], include_in_schema=False)

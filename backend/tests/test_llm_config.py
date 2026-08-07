@@ -167,5 +167,5 @@ async def test_researcher_cannot_create(client, auth_headers):
         "base_url": "https://api.example.com/v1",
         # 缺 api_key 和 test_model
     }, headers=auth_headers)
-    # P0.2 改造后 RequestValidationError 被映射到 400 VALIDATION_ERROR
-    assert resp.status_code == 400
+    # P0.2/BUG-003 改造后 RequestValidationError 统一返回 422
+    assert resp.status_code == 422

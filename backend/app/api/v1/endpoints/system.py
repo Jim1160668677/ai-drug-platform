@@ -52,66 +52,64 @@ async def api_health_check():
 
 @router.get("/metrics", response_class=PlainTextResponse, summary="Prometheus 监控指标")
 async def metrics():
-    """Prometheus 格式监控指标
+    """Prometheus 格式监控指标 — Phase F
 
-    暴露指标：
+    暴露指标（由 app/core/observability/metrics.py 自动采集）：
     - precision_drug_http_requests_total{method,path,status}
-    - precision_drug_http_request_duration_ms_bucket{le}
+    - precision_drug_http_request_duration_seconds_bucket{method,path,le}
+    - precision_drug_http_requests_in_progress
+    - precision_drug_llm_calls_total{model,tier,status}
+    - precision_drug_llm_call_duration_seconds_bucket{model,tier,le}
     - precision_drug_llm_cost_usd_total{model}
-    - precision_drug_active_users_count
+    - precision_drug_llm_cache_hits_total{tier}
+    - precision_drug_llm_cache_misses_total{tier}
+    - precision_drug_ws_connections_active
     - precision_drug_db_connections_active
-    - precision_drug_uptime_seconds
+    - precision_drug_app_uptime_seconds
 
-    TODO: P2 集成 prometheus_client 真实指标收集器
+    实现说明：
+    - 通过 prometheus_client.generate_latest() 输出真实指标
+    - MetricsMiddleware 自动采集 HTTP 请求指标
+    - LLM 指标通过 record_llm_call() 在服务层采集
     """
-    uptime = int(time.time() - _START_TIME)
+    from app.core.config import settings
 
-    # 尝试从 CostTracker 获取真实 LLM 成本
-    llm_cost_lines = []
+    if not getattr(settings, "METRICS_ENABLED", True):
+        return PlainTextResponse(
+            "# Metrics disabled by configuration\n",
+            media_type="text/plain; version=0.0.4",
+        )
+
+    # 同步 CostTracker 数据到 Prometheus 指标
     try:
         from app.services.llm.cost_tracker import get_cost_tracker
+        from app.core.observability.metrics import LLM_COST_USD_TOTAL, LLM_CALLS_TOTAL
         tracker = get_cost_tracker()
         if tracker:
             summary = tracker.today_summary()
+            # 注意：CostTracker 是累计当日花费，这里通过 gauge 模拟
+            # 真实场景应改为在 record() 时直接 inc 到 Counter
             for model, cost in summary.get("by_model", {}).items():
-                llm_cost_lines.append(
-                    f'precision_drug_llm_cost_usd_total{{model="{model}"}} {cost:.6f}'
-                )
+                try:
+                    # 直接设置到 counter 的底层值（仅用于展示）
+                    # 生产环境应通过 record_llm_call() 在每次调用时 inc
+                    pass  # 避免重复计数：record_llm_call 已在调用时记录
+                except Exception:
+                    pass
     except Exception:
         pass
 
-    if not llm_cost_lines:
-        llm_cost_lines.append('precision_drug_llm_cost_usd_total{model="unknown"} 0.0')
+    # 同步 LLM 缓存统计
+    try:
+        from app.services.llm.cache import get_cache
+        from app.core.observability.metrics import record_cache_hit, record_cache_miss
+        cache = get_cache()
+        stats = cache.stats()
+        # 缓存统计是累计值，这里不重复记录（已在 get/set 时记录）
+        _ = stats  # 预留用于 debug
+    except Exception:
+        pass
 
-    lines = [
-        "# HELP precision_drug_http_requests_total Total HTTP requests",
-        "# TYPE precision_drug_http_requests_total counter",
-        'precision_drug_http_requests_total{method="GET",path="/health",status="200"} 1',
-        "",
-        "# HELP precision_drug_http_request_duration_ms_bucket HTTP request duration in ms",
-        "# TYPE precision_drug_http_request_duration_ms_bucket histogram",
-        'precision_drug_http_request_duration_ms_bucket{le="50"} 1',
-        'precision_drug_http_request_duration_ms_bucket{le="100"} 1',
-        'precision_drug_http_request_duration_ms_bucket{le="500"} 1',
-        'precision_drug_http_request_duration_ms_bucket{le="+Inf"} 1',
-        "",
-        "# HELP precision_drug_llm_cost_usd_total Total LLM cost in USD",
-        "# TYPE precision_drug_llm_cost_usd_total counter",
-    ]
-    lines.extend(llm_cost_lines)
-    lines.extend([
-        "",
-        "# HELP precision_drug_active_users_count Current active users",
-        "# TYPE precision_drug_active_users_count gauge",
-        "precision_drug_active_users_count 0",
-        "",
-        "# HELP precision_drug_db_connections_active Active database connections",
-        "# TYPE precision_drug_db_connections_active gauge",
-        "precision_drug_db_connections_active 0",
-        "",
-        "# HELP precision_drug_uptime_seconds Uptime in seconds",
-        "# TYPE precision_drug_uptime_seconds gauge",
-        f"precision_drug_uptime_seconds {uptime}",
-        "",
-    ])
-    return PlainTextResponse("\n".join(lines), media_type="text/plain; version=0.0.4")
+    from app.core.observability.metrics import generate_metrics
+    content, content_type = generate_metrics()
+    return PlainTextResponse(content, media_type=content_type)

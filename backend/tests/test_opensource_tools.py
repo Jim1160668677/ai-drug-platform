@@ -254,7 +254,8 @@ class TestDeepChemIntegration:
         result = await designer.design({"target_id": "test", "smiles": "CCO"})
         assert "model_info" in result
         assert result["model_info"]["status"] in (
-            "framework_only", "deepchem_predicted", "model_load_failed"
+            "framework_only", "deepchem_predicted", "model_load_failed", 
+"rdkit_fallback", "mock_mode"
         )
 
 

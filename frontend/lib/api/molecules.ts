@@ -22,6 +22,10 @@ export const predictProperties = (smiles: string) =>
 export const explainMolecule = (smiles: string) =>
   api.post('/molecules/explain', { smiles }).then((r) => r.data);
 
+/** 基于 SMILES 自动生成分子名称（骨架+功能团+分子式+哈希） */
+export const autoNameMolecule = (smiles: string, prefix: string = 'Mol') =>
+  api.post('/molecules/auto-name', { smiles, prefix }).then((r) => r.data?.data ?? r.data);
+
 // ========== 多靶点协同分子设计 ==========
 
 export const designMultiTargetMolecules = (

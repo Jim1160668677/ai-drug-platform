@@ -192,11 +192,11 @@ class TestPrivacyEndpoints:
 
     @pytest.mark.asyncio
     async def test_create_domain_missing_field(self, client: AsyncClient, auth_headers):
-        """缺 name 字段应触发 Pydantic 校验错误 400"""
+        """缺 name 字段应触发 Pydantic 校验错误 422"""
         resp = await client.post(
             "/api/v1/privacy/domains", json={}, headers=auth_headers
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
@@ -340,13 +340,13 @@ class TestPrivacyEndpoints:
 
     @pytest.mark.asyncio
     async def test_laplace_invalid_epsilon_zero(self, client: AsyncClient, auth_headers):
-        """epsilon 必须 > 0：传 0 应触发 Pydantic 校验错误 400"""
+        """epsilon 必须 > 0：传 0 应触发 Pydantic 校验错误 422"""
         resp = await client.post(
             "/api/v1/privacy/differential/laplace",
             json={"value": 100.0, "sensitivity": 1.0, "epsilon": 0},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
@@ -366,13 +366,13 @@ class TestPrivacyEndpoints:
 
     @pytest.mark.asyncio
     async def test_gaussian_invalid_delta_out_of_range(self, client: AsyncClient, auth_headers):
-        """delta 必须 ∈ (0,1)：传 1.5 应触发校验错误 400"""
+        """delta 必须 ∈ (0,1)：传 1.5 应触发校验错误 422"""
         resp = await client.post(
             "/api/v1/privacy/differential/gaussian",
             json={"value": 50.0, "sensitivity": 1.0, "epsilon": 1.0, "delta": 1.5},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
@@ -484,13 +484,13 @@ class TestEfficacyEndpoints:
 
     @pytest.mark.asyncio
     async def test_recist_classify_missing_field(self, client: AsyncClient, auth_headers):
-        """缺 lesions 字段应触发 Pydantic 校验错误 400"""
+        """缺 lesions 字段应触发 Pydantic 校验错误 422"""
         resp = await client.post(
             "/api/v1/efficacy/recist-classify",
             json={},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
@@ -533,13 +533,13 @@ class TestFederatedEndpoints:
 
     @pytest.mark.asyncio
     async def test_create_job_invalid_num_rounds(self, client: AsyncClient, auth_headers):
-        """num_rounds 必须 >= 1：传 0 应触发校验错误 400"""
+        """num_rounds 必须 >= 1：传 0 应触发校验错误 422"""
         resp = await client.post(
             "/api/v1/federated/jobs",
             json={"project_id": "proj-bad", "num_rounds": 0},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     @pytest.mark.asyncio
     async def test_list_jobs_after_create(self, client: AsyncClient, auth_headers):
@@ -707,13 +707,13 @@ class TestFeedbackEndpoints:
 
     @pytest.mark.asyncio
     async def test_recalibrate_missing_field(self, client: AsyncClient, auth_headers):
-        """缺 target_symbol 字段应触发 400"""
+        """缺 target_symbol 字段应触发 422"""
         resp = await client.post(
             "/api/v1/feedback/recalibrate",
             json={},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
@@ -747,13 +747,13 @@ class TestFeedbackEndpoints:
 
     @pytest.mark.asyncio
     async def test_tracker_invalid_uuid(self, client: AsyncClient, auth_headers):
-        """非法 UUID 应触发 400 校验错误"""
+        """非法 UUID 应触发 422 校验错误"""
         resp = await client.get(
             "/api/v1/feedback/experiments/tracker",
             params={"experiment_id": "not-a-uuid"},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
 
 # ============================================================
@@ -782,7 +782,7 @@ class TestSystemEndpoints:
         assert resp.status_code == 200
         assert "text/plain" in resp.headers.get("content-type", "")
         text = resp.text
-        assert "precision_drug_uptime_seconds" in text
+        assert "precision_drug_app_uptime_seconds" in text
         assert "precision_drug_http_requests_total" in text
 
     @pytest.mark.asyncio

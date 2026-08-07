@@ -49,6 +49,9 @@ def _make_mock_db(project_exists=True, targets=None, molecules=None, treatments=
     - db.get(Project, project_id) → 返回 project 或 None
     - db.execute(stmt) → 根据 stmt 返回不同结果（通过 side_effect 列表控制）
     - db.flush() → AsyncMock
+    - db.commit() → AsyncMock
+    - db.refresh() → AsyncMock
+    - db.rollback() → AsyncMock
     - db.add(obj) → MagicMock
     """
     mock_db = MagicMock()
@@ -58,6 +61,9 @@ def _make_mock_db(project_exists=True, targets=None, molecules=None, treatments=
         )
     )
     mock_db.flush = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.refresh = AsyncMock()
+    mock_db.rollback = AsyncMock()
     mock_db.add = MagicMock()
     mock_db.execute = AsyncMock()
     return mock_db

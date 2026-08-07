@@ -22,6 +22,56 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "- 给出推荐方案（含剂量与证据来源）\n"
         "- 标注证据等级（I-IV）\n"
     ),
+    # ========== Phase 2 混合架构 Prompt ==========
+    "hybrid_hypothesis": (
+        "你是药物化学假设生成专家。基于靶点信息和候选分子列表，筛选最可能成药的候选分子。\n\n"
+        "要求：\n"
+        "- 分析靶点结合口袋特征（如有结构信息）\n"
+        "- 基于药效团（pharmacophore）评估每个 SMILES 的匹配度\n"
+        "- 考虑类药性（Lipinski 五规则）和合成可及性\n"
+        "- 输出 JSON：{\"selected\": [{\"smiles\": \"...\", \"reason\": \"...\", \"priority\": 1-5}]}\n"
+        "- 优先级 1=最优先，5=备选；最多返回 top_k 个\n"
+        "- 不确定时返回空列表，不要编造\n"
+    ),
+    "hybrid_reranking": (
+        "你是分子对接结果重排序专家。基于对接分数和药物化学知识重新排序候选分子。\n\n"
+        "要求：\n"
+        "- 综合考虑对接分数（affinity/RMSD）和药物化学合理性\n"
+        "- 评估结合模式的关键相互作用（氢键、π-π 堆积、疏水作用）\n"
+        "- 检查潜在的毒性基团（alerting substructures）\n"
+        "- 输出 JSON：{\"ranked\": [{\"smiles\": \"...\", \"final_score\": 0-1, \"reason\": \"...\"}]}\n"
+        "- final_score 综合对接 + 药化 + 毒理，0=最差，1=最优\n"
+    ),
+    "hybrid_report": (
+        "你是混合架构药物发现报告生成专家。综合 LLM 假设、计算对接结果和成本数据生成结构化报告。\n\n"
+        "要求：\n"
+        "- 摘要：一句话结论 + 推荐分子\n"
+        "- 关键发现：top-3 候选分子的对接分数、结合模式、合成难度\n"
+        "- 成本效益：LLM+计算混合 vs 纯超算的成本节省百分比\n"
+        "- 风险提示：候选分子的潜在毒性、代谢稳定性问题\n"
+        "- 下一步建议：湿实验验证优先级排序\n"
+        "- 输出 Markdown 格式，控制在 1500 字以内\n"
+    ),
+    "vaccine_design": (
+        "你是 mRNA 疫苗序列设计专家。基于新抗原肽段设计个性化 mRNA 疫苗序列。\n\n"
+        "要求：\n"
+        "- 输入：新抗原肽段列表（mutant_peptide + binding_affinity_nM）\n"
+        "- 设计 mRNA 序列：优化密码子使用、GC 含量 30-70%、避免 poly-A/T 序列\n"
+        "- 评估免疫原性：基于 MHC 结合亲和力和肽段独特性\n"
+        "- 输出 JSON：{\"vaccine_sequence\": \"AUG...\", \"gc_content\": 0.5, \"length\": 900, "
+        "\"immunogenicity_score\": 0-1, \"notes\": \"设计说明\"}\n"
+        "- mRNA 长度应在 300-3000 nt 之间\n"
+    ),
+    "dual_context_interpretation": (
+        "你是双上下文筛选结果解读专家。基于免疫活跃 vs 中性上下文的对接差异解读条件放大器。\n\n"
+        "要求：\n"
+        "- 识别 conditional_amplification_score > 阈值的分子（条件放大器）\n"
+        "- 解读为什么该分子在免疫活跃上下文下效果更强\n"
+        "- 评估是否为免疫相关靶点的条件性调节剂\n"
+        "- 输出 JSON：{\"amplifiers\": [{\"smiles\": \"...\", \"score\": 0.5, \"mechanism\": \"...\"}], "
+        "\"summary\": \"筛选总结\"}\n"
+        "- score 是条件放大器得分（efficacy_active - efficacy_neutral）\n"
+    ),
 }
 
 
@@ -117,6 +167,30 @@ def build_context_prompt(context: Dict[str, Any]) -> str:
     if trials:
         t_lines = [f"- {t.get('nct_id', '?')}: {t.get('title', '?')[:60]}" for t in trials[:5]]
         parts.append("## 临床试验\n" + "\n".join(t_lines))
+
+    user_genome = context.get("user_genome") or {}
+    if user_genome:
+        ug_lines: List[str] = []
+        if user_genome.get("has_genome"):
+            ug_lines.append(
+                f"- 文件：{user_genome.get('file_name', '?')} "
+                f"（{user_genome.get('genome_build', '?')}，"
+                f"{user_genome.get('total_variants') or '?'} 变异）"
+            )
+            assessments = user_genome.get("latest_assessments") or []
+            for a in assessments[:3]:
+                ug_lines.append(
+                    f"- 风险评估：{a.get('risk_level', '?')} "
+                    f"（评分 {a.get('overall_risk_score', '?')}，性状 {a.get('trait_id', '?')}）"
+                )
+            genotypes = user_genome.get("user_genotypes") or []
+            for g in genotypes[:10]:
+                ug_lines.append(
+                    f"- 风险位点 {g.get('rsid', '?')} "
+                    f"({g.get('gene_symbol') or '-'})：基因型 {g.get('user_genotype', '?')}，"
+                    f"风险评分 {g.get('risk_score', 0)}"
+                )
+            parts.append("## 用户个人基因组上下文\n" + "\n".join(ug_lines))
 
     extra = context.get("extra")
     if extra:

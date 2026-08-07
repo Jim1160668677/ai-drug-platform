@@ -31,6 +31,10 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
+# 别名：部分模块（如 agent.py 后台任务）使用 async_session_factory 命名
+# 保留别名以保持向后兼容，避免大规模重命名引入回归
+async_session_factory = AsyncSessionLocal
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI 依赖：获取数据库会话"""

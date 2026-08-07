@@ -344,8 +344,13 @@ class TestVectorStoreRealMode:
 
         assert result == []
 
-    def test_get_collection_cached(self):
-        """已缓存的 collection 应直接返回"""
+    @pytest.mark.asyncio
+    async def test_get_collection_cached(self):
+        """已缓存的 collection 应直接返回（异步方法）
+
+        当前实现：_get_collection 改为 async 方法（包裹同步 ChromaDB 调用避免阻塞事件循环），
+        但已缓存的 collection 走快速路径，无需 await to_thread
+        """
         from app.services.knowledge.vector import VectorStore
         from app.core.config import settings
 
@@ -356,10 +361,12 @@ class TestVectorStoreRealMode:
             vs._client = mock_client
             mock_coll = MagicMock()
             vs._collections["test"] = mock_coll
-            assert vs._get_collection("test") is mock_coll
+            # _get_collection 现在是 async 方法
+            assert await vs._get_collection("test") is mock_coll
 
-    def test_get_collection_create_failure(self):
-        """get_or_create_collection 失败应返回 None"""
+    @pytest.mark.asyncio
+    async def test_get_collection_create_failure(self):
+        """get_or_create_collection 失败应返回 None（异步方法）"""
         from app.services.knowledge.vector import VectorStore
         from app.core.config import settings
 
@@ -369,7 +376,8 @@ class TestVectorStoreRealMode:
         with patch.object(settings, "USE_MOCK", False):
             vs = VectorStore()
             vs._client = mock_client
-            result = vs._get_collection("new_coll")
+            # _get_collection 现在是 async 方法，失败时返回 None
+            result = await vs._get_collection("new_coll")
 
         assert result is None
 

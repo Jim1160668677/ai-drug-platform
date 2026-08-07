@@ -10,16 +10,20 @@
 - 幂等：重复运行不产生重复数据
 - 容错：单步失败不中断整个流水线
 - 可观测：返回每步状态、耗时、结果摘要
+- 持久化：每个步骤独立 commit，支持断点续传
+- 结构化日志：记录每步的输入、输出、耗时、错误
 """
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.molecule import Molecule
+from app.models.pipeline_run import PipelineRun, PipelineRunStatus, StepStatus
 from app.models.project import Project
 from app.models.target import Target
 from app.models.treatment import Treatment, TreatmentStatus, TreatmentType
@@ -34,7 +38,6 @@ class PipelineStepStatus:
     SKIPPED = "skipped"
 
 
-# 流水线步骤顺序（用于 resume_from_step 定位）
 STEP_ORDER = [
     "target_discovery",
     "molecule_generation",
@@ -48,6 +51,157 @@ class DiscoveryPipeline:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self._pipeline_run: Optional[PipelineRun] = None
+
+    # ---------- PipelineRun 持久化追踪 ----------
+
+    async def _create_pipeline_run(
+        self,
+        project_id: UUID,
+        tier: str,
+        max_targets: int,
+        molecules_per_target: int,
+        molecule_strategy: str,
+        skip_existing: bool,
+        enable_hypothesis: bool,
+        triggered_by: Optional[UUID] = None,
+    ) -> PipelineRun:
+        pipeline_run = PipelineRun(
+            project_id=project_id,
+            status=PipelineRunStatus.PENDING,
+            tier=tier,
+            max_targets=max_targets,
+            molecules_per_target=molecules_per_target,
+            molecule_strategy=molecule_strategy,
+            skip_existing=skip_existing,
+            enable_hypothesis=enable_hypothesis,
+            triggered_by=triggered_by,
+        )
+        self.db.add(pipeline_run)
+        await self.db.commit()
+        await self.db.refresh(pipeline_run)
+        self._pipeline_run = pipeline_run
+        return pipeline_run
+
+    async def _mark_running(self) -> None:
+        if not self._pipeline_run:
+            return
+        self._pipeline_run.status = PipelineRunStatus.RUNNING
+        self._pipeline_run.started_at = datetime.utcnow()
+        await self.db.commit()
+
+    async def _mark_completed(self, duration: float, summary: Dict[str, Any]) -> None:
+        if not self._pipeline_run:
+            return
+        self._pipeline_run.status = PipelineRunStatus.COMPLETED
+        self._pipeline_run.completed_at = datetime.utcnow()
+        self._pipeline_run.duration_sec = duration
+        self._pipeline_run.summary = summary
+        self._pipeline_run.add_log(
+            "info", "pipeline", "流水线执行完成",
+            duration_sec=duration, summary=summary,
+        )
+        await self.db.commit()
+
+    async def _mark_failed(self, error: Exception) -> None:
+        if not self._pipeline_run:
+            return
+        self._pipeline_run.status = PipelineRunStatus.FAILED
+        self._pipeline_run.error_message = str(error)
+        self._pipeline_run.completed_at = datetime.utcnow()
+        self._pipeline_run.add_log(
+            "error", "pipeline", f"流水线执行失败: {str(error)}",
+            error_type=type(error).__name__,
+        )
+        await self.db.commit()
+
+    # ---------- 结构化日志 ----------
+
+    async def _log_step_start(self, step_name: str) -> None:
+        if self._pipeline_run:
+            self._pipeline_run.add_log(
+                "info", step_name, "步骤开始执行",
+                pipeline_run_id=str(self._pipeline_run.id),
+            )
+            self._pipeline_run.current_step = step_name
+            await self.db.commit()
+
+    async def _log_step_complete(
+        self, step_name: str, status: str, duration_sec: float, **kwargs: Any
+    ) -> None:
+        if self._pipeline_run:
+            self._pipeline_run.update_step_status(
+                step_name, status, duration_sec=duration_sec, **kwargs
+            )
+            log_level = "info" if status in (StepStatus.SUCCESS, StepStatus.PARTIAL) else "error"
+            self._pipeline_run.add_log(
+                log_level, step_name, f"步骤{status}",
+                duration_sec=duration_sec,
+                **kwargs,
+            )
+            await self.db.commit()
+
+    async def _log_step_error(self, step_name: str, error: Exception) -> None:
+        if self._pipeline_run:
+            self._pipeline_run.add_log(
+                "error", step_name, f"步骤异常: {str(error)}",
+                error_type=type(error).__name__,
+            )
+            self._pipeline_run.error_message = str(error)
+            await self.db.commit()
+
+    # ---------- 统一步骤执行框架 ----------
+
+    async def _execute_step(
+        self,
+        step_name: str,
+        runner: Callable[[], Any],
+        success_extras: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        await self._log_step_start(step_name)
+        try:
+            result = await runner()
+            status = result.get("status", StepStatus.FAILED)
+            duration = result.get("duration_sec", 0)
+
+            if status in (PipelineStepStatus.SUCCESS, PipelineStepStatus.PARTIAL):
+                await self.db.commit()
+                logger.info(
+                    "[pipeline] 步骤 %s 完成: status=%s duration=%.3fs",
+                    step_name, status, duration,
+                )
+            else:
+                logger.warning(
+                    "[pipeline] 步骤 %s 返回失败状态: %s", step_name, status,
+                )
+
+            extras = success_extras or {}
+            merged_extras = {
+                k: v for k, v in result.items()
+                if k not in ("status", "duration_sec", "error")
+            }
+            merged_extras.update(extras)
+            await self._log_step_complete(
+                step_name, status, duration, **merged_extras,
+            )
+            return result
+        except Exception as e:
+            logger.error(
+                "[pipeline] 步骤 %s 异常: %s", step_name, e, exc_info=True,
+            )
+            await self._log_step_error(step_name, e)
+            await self.db.rollback()
+            err_result: Dict[str, Any] = {
+                "status": PipelineStepStatus.FAILED,
+                "error": str(e),
+                "duration_sec": 0,
+            }
+            await self._log_step_complete(
+                step_name, StepStatus.FAILED, 0, error=str(e),
+            )
+            return err_result
+
+    # ---------- 主入口 ----------
 
     async def run(
         self,
@@ -65,30 +219,11 @@ class DiscoveryPipeline:
         resume_from_step: Optional[str] = None,
         skip_steps: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """运行端到端流水线
-
-        Args:
-            project_id: 项目 ID
-            dataset_id: 指定数据集（可选，默认分析项目所有数据集）
-            tier: 分析层级 fast_screen / deep_insight
-            max_targets: 分子生成步骤处理的靶点上限
-            molecules_per_target: 每个靶点生成的候选分子数
-            molecule_strategy: 分子生成策略 fragment/optimization/random
-            skip_existing: 是否跳过已有结果的步骤
-            current_user: 当前用户（用于权限可见性过滤，预留）
-            enable_hypothesis: 是否启用 Step 4 假设生成（默认 True）
-            hypothesis_config: 假设生成配置 {use_llm, mode, max_hypotheses, context}
-            custom_steps: 自定义步骤列表 [{name, type, config}]
-            resume_from_step: 从指定步骤恢复（跳过之前的步骤）；
-                取值范围 STEP_ORDER: target_discovery/molecule_generation/treatment_matching/hypothesis_generation
-            skip_steps: 跳过指定步骤列表（与 resume_from_step 可组合使用）
-        Returns:
-            {project_id, duration_sec, steps: {...}, summary: {...}}
-        """
         pipeline_start = time.time()
 
         project = await self.db.get(Project, project_id)
         if not project:
+            logger.warning("[pipeline] 项目 %s 不存在", project_id)
             return {
                 "project_id": str(project_id),
                 "duration_sec": 0,
@@ -97,7 +232,32 @@ class DiscoveryPipeline:
                 "summary": {"total_targets": 0, "total_molecules": 0, "total_treatments": 0},
             }
 
-        # 步骤跳过判定逻辑
+        triggered_by = current_user.id if current_user else None
+        pipeline_run = await self._create_pipeline_run(
+            project_id=project_id,
+            tier=tier,
+            max_targets=max_targets,
+            molecules_per_target=molecules_per_target,
+            molecule_strategy=molecule_strategy,
+            skip_existing=skip_existing,
+            enable_hypothesis=enable_hypothesis,
+            triggered_by=triggered_by,
+        )
+
+        # 自动断点续传：仅当 PipelineRun 处于失败/暂停状态时才自动恢复
+        if not resume_from_step and pipeline_run.status in (PipelineRunStatus.FAILED, PipelineRunStatus.PAUSED):
+            resume_point = pipeline_run.get_resume_point()
+            if resume_point:
+                resume_from_step = resume_point
+                logger.info("[pipeline] 自动断点续传: 从步骤 %s 恢复", resume_from_step)
+                pipeline_run.add_log(
+                    "info", resume_from_step,
+                    f"自动断点续传：从步骤 {resume_from_step} 恢复执行",
+                )
+                await self.db.commit()
+
+        await self._mark_running()
+
         skip_steps_set = set(skip_steps or [])
 
         def should_run(step_name: str) -> bool:
@@ -121,9 +281,12 @@ class DiscoveryPipeline:
         molecules: List[Molecule] = []
 
         # ========== Step 1: 靶点发现 ==========
-        if not should_run("target_discovery"):
-            steps_result["target_discovery"] = skipped_result()
-            # resume 场景：从已有数据库中加载靶点，供后续步骤使用
+        step1_name = "target_discovery"
+        if not should_run(step1_name):
+            steps_result[step1_name] = skipped_result()
+            pipeline_run.update_step_status(step1_name, StepStatus.SKIPPED, reason="resume/skip")
+            pipeline_run.add_log("info", step1_name, "步骤跳过（resume/skip）")
+            await self.db.commit()
             target_stmt = (
                 select(Target)
                 .where(Target.project_id == project_id)
@@ -133,147 +296,150 @@ class DiscoveryPipeline:
             target_result = await self.db.execute(target_stmt)
             targets = list(target_result.scalars().all())
         else:
-            try:
-                step1 = await self._step1_discover_targets(
+            step1 = await self._execute_step(
+                step1_name,
+                lambda: self._step1_discover_targets(
                     project_id=project_id,
                     dataset_id=dataset_id,
                     tier=tier,
+                ),
+            )
+            steps_result[step1_name] = step1
+            if step1.get("status") != StepStatus.FAILED:
+                target_stmt = (
+                    select(Target)
+                    .where(Target.project_id == project_id)
+                    .order_by(Target.confidence_score.desc().nullslast())
+                    .limit(max_targets)
                 )
-                steps_result["target_discovery"] = step1
-
-                if step1["status"] != PipelineStepStatus.FAILED:
-                    target_stmt = (
-                        select(Target)
-                        .where(Target.project_id == project_id)
-                        .order_by(Target.confidence_score.desc().nullslast())
-                        .limit(max_targets)
-                    )
-                    target_result = await self.db.execute(target_stmt)
-                    targets = list(target_result.scalars().all())
-            except Exception as e:
-                logger.error(f"Step 1 靶点发现异常: {e}", exc_info=True)
-                steps_result["target_discovery"] = {
-                    "status": PipelineStepStatus.FAILED,
-                    "error": str(e),
-                    "duration_sec": 0,
-                    "targets_found": 0,
-                }
+                target_result = await self.db.execute(target_stmt)
+                targets = list(target_result.scalars().all())
 
         # ========== Step 2: 分子生成+评估 ==========
-        if not should_run("molecule_generation"):
-            steps_result["molecule_generation"] = skipped_result()
-            # resume 场景：从已有数据库中加载分子，供后续步骤使用
+        step2_name = "molecule_generation"
+        if not should_run(step2_name):
+            steps_result[step2_name] = skipped_result()
+            pipeline_run.update_step_status(step2_name, StepStatus.SKIPPED, reason="resume/skip")
+            pipeline_run.add_log("info", step2_name, "步骤跳过（resume/skip）")
+            await self.db.commit()
             if targets:
                 target_ids = [t.id for t in targets]
                 mol_stmt = select(Molecule).where(Molecule.target_id.in_(target_ids))
                 mol_result = await self.db.execute(mol_stmt)
                 molecules = list(mol_result.scalars().all())
         elif targets:
-            try:
-                step2 = await self._step2_generate_molecules(
+            step2 = await self._execute_step(
+                step2_name,
+                lambda: self._step2_generate_molecules(
                     targets=targets,
                     molecules_per_target=molecules_per_target,
                     molecule_strategy=molecule_strategy,
                     skip_existing=skip_existing,
-                )
-                steps_result["molecule_generation"] = step2
-
-                if step2["status"] != PipelineStepStatus.FAILED:
-                    target_ids = [t.id for t in targets]
-                    mol_stmt = select(Molecule).where(Molecule.target_id.in_(target_ids))
-                    mol_result = await self.db.execute(mol_stmt)
-                    molecules = list(mol_result.scalars().all())
-            except Exception as e:
-                logger.error(f"Step 2 分子生成异常: {e}", exc_info=True)
-                steps_result["molecule_generation"] = {
-                    "status": PipelineStepStatus.FAILED,
-                    "error": str(e),
-                    "duration_sec": 0,
-                    "molecules_saved": 0,
-                }
+                ),
+            )
+            steps_result[step2_name] = step2
+            if step2.get("status") != StepStatus.FAILED:
+                target_ids = [t.id for t in targets]
+                mol_stmt = select(Molecule).where(Molecule.target_id.in_(target_ids))
+                mol_result = await self.db.execute(mol_stmt)
+                molecules = list(mol_result.scalars().all())
         else:
-            steps_result["molecule_generation"] = {
+            steps_result[step2_name] = {
                 "status": PipelineStepStatus.SKIPPED,
                 "reason": "无可用靶点，跳过分子生成",
                 "duration_sec": 0,
                 "molecules_saved": 0,
             }
+            pipeline_run.update_step_status(step2_name, StepStatus.SKIPPED, reason="no_targets")
+            await self.db.commit()
 
         # ========== Step 3: 治疗方案匹配 ==========
-        if not should_run("treatment_matching"):
-            steps_result["treatment_matching"] = skipped_result()
+        step3_name = "treatment_matching"
+        if not should_run(step3_name):
+            steps_result[step3_name] = skipped_result()
+            pipeline_run.update_step_status(step3_name, StepStatus.SKIPPED, reason="resume/skip")
+            await self.db.commit()
         else:
-            try:
-                step3 = await self._step3_match_treatments(
+            step3 = await self._execute_step(
+                step3_name,
+                lambda: self._step3_match_treatments(
                     project_id=project_id,
                     targets=targets,
                     molecules=molecules,
                     skip_existing=skip_existing,
-                )
-                steps_result["treatment_matching"] = step3
-            except Exception as e:
-                logger.error(f"Step 3 治疗方案匹配异常: {e}", exc_info=True)
-                steps_result["treatment_matching"] = {
-                    "status": PipelineStepStatus.FAILED,
-                    "error": str(e),
-                    "duration_sec": 0,
-                    "treatments_created": 0,
-                }
+                ),
+            )
+            steps_result[step3_name] = step3
 
         # ========== Step 4: 假设生成（可选，默认启用） ==========
-        if enable_hypothesis and should_run("hypothesis_generation"):
-            try:
-                step4 = await self._step4_generate_hypotheses(
+        step4_name = "hypothesis_generation"
+        if enable_hypothesis and should_run(step4_name):
+            step4 = await self._execute_step(
+                step4_name,
+                lambda: self._step4_generate_hypotheses(
                     project_id=project_id,
                     targets=targets,
                     molecules=molecules,
                     hypothesis_config=hypothesis_config or {},
-                )
-                steps_result["hypothesis_generation"] = step4
-            except Exception as e:
-                logger.error(f"Step 4 假设生成异常: {e}", exc_info=True)
-                steps_result["hypothesis_generation"] = {
-                    "status": PipelineStepStatus.FAILED,
-                    "error": str(e),
-                    "duration_sec": 0,
-                    "hypotheses_generated": 0,
-                }
+                ),
+            )
+            steps_result[step4_name] = step4
         elif enable_hypothesis:
-            steps_result["hypothesis_generation"] = skipped_result()
+            steps_result[step4_name] = skipped_result()
+            pipeline_run.update_step_status(step4_name, StepStatus.SKIPPED, reason="resume/skip")
+            await self.db.commit()
 
         # ========== Step 5: 自定义步骤（可选） ==========
         if custom_steps:
-            custom_results = await self._run_custom_steps(
-                project_id=project_id,
-                custom_steps=custom_steps,
-                context={
-                    "targets": targets,
-                    "molecules": molecules,
-                    "steps_result": steps_result,
-                },
+            custom_result = await self._execute_step(
+                "custom_steps",
+                lambda: self._run_custom_steps(
+                    project_id=project_id,
+                    custom_steps=custom_steps,
+                    context={
+                        "targets": targets,
+                        "molecules": molecules,
+                        "steps_result": steps_result,
+                    },
+                ),
             )
-            steps_result["custom_steps"] = custom_results
+            steps_result["custom_steps"] = custom_result
 
+        # ========== 完成 ==========
         duration = round(time.time() - pipeline_start, 3)
         skipped_list = [
             s for s in steps_result
             if isinstance(steps_result.get(s), dict)
             and steps_result[s].get("status") == PipelineStepStatus.SKIPPED
         ]
+
+        summary = {
+            "total_targets": len(targets),
+            "total_molecules": len(molecules),
+            "total_treatments": steps_result.get("treatment_matching", {}).get("treatments_created", 0),
+            "total_hypotheses": steps_result.get("hypothesis_generation", {}).get("hypotheses_generated", 0),
+            "custom_steps_executed": len(custom_steps) if custom_steps else 0,
+            "skipped_steps": skipped_list,
+            "resumed_from": resume_from_step,
+        }
+
+        await self._mark_completed(duration, summary)
+
+        logger.info(
+            "[pipeline] 项目 %s 流水线完成: %d 靶点 / %d 分子 / %d 治疗方案 / %.1fs",
+            project_id, len(targets), len(molecules),
+            summary["total_treatments"], duration,
+        )
+
         return {
             "project_id": str(project_id),
             "duration_sec": duration,
+            "pipeline_run_id": str(pipeline_run.id),
             "steps": steps_result,
-            "summary": {
-                "total_targets": len(targets),
-                "total_molecules": len(molecules),
-                "total_treatments": steps_result.get("treatment_matching", {}).get("treatments_created", 0),
-                "total_hypotheses": steps_result.get("hypothesis_generation", {}).get("hypotheses_generated", 0),
-                "custom_steps_executed": len(custom_steps) if custom_steps else 0,
-                "skipped_steps": skipped_list,
-                "resumed_from": resume_from_step,
-            },
+            "summary": summary,
         }
+
+    # ---------- 业务步骤实现（保持原有逻辑） ----------
 
     async def _step1_discover_targets(
         self,
@@ -281,10 +447,6 @@ class DiscoveryPipeline:
         dataset_id: Optional[UUID],
         tier: str,
     ) -> Dict[str, Any]:
-        """Step 1: 靶点发现 — 复用 TargetIdentifier.discover()
-
-        discover() 内部已有 project_id + gene_symbol 幂等检查，无需额外处理。
-        """
         from app.services.analyzer.target_identifier import TargetIdentifier
 
         start = time.time()
@@ -311,11 +473,6 @@ class DiscoveryPipeline:
         molecule_strategy: str,
         skip_existing: bool,
     ) -> Dict[str, Any]:
-        """Step 2: 分子生成+评估 — 复用 MoleculeDesigner + assess/predict/explain
-
-        逻辑提取自 endpoints/molecules.py 的 _auto_generate_molecules，
-        扩展为接受 targets 列表 + 增加 ADMET 和可解释性评估。
-        """
         from app.services.analyzer.molecule_designer import (
             MoleculeDesigner,
             assess_druglikeness,
@@ -334,7 +491,6 @@ class DiscoveryPipeline:
         for target in targets:
             targets_processed += 1
 
-            # 幂等检查：该靶点是否已有分子
             if skip_existing:
                 existing_mol_stmt = (
                     select(Molecule)
@@ -376,13 +532,11 @@ class DiscoveryPipeline:
                     admet = predict_admet(smiles)
                     explanation = explain_molecule(smiles)
 
-                    # 筛选：通过 Lipinski 且评分 >= 60
                     if passes_ro5 and score >= 60:
                         scored_candidates.append(
                             (score, mol, props, {"admet": admet, "explain": explanation})
                         )
 
-                # 降级：无通过筛选的，取评分最高的
                 if not scored_candidates:
                     for mol in molecules_data:
                         smiles = mol.get("smiles", "")
@@ -398,14 +552,12 @@ class DiscoveryPipeline:
                             (score, mol, props, {"admet": admet, "explain": explanation})
                         )
 
-                # 按类药性评分降序，取前 10
                 scored_candidates.sort(key=lambda x: x[0], reverse=True)
                 top_candidates = scored_candidates[:10]
 
                 for score, mol, props, extra in top_candidates:
                     smiles = mol.get("smiles", "")
 
-                    # 幂等：检查 target_id + smiles 是否已存在
                     dup_stmt = (
                         select(Molecule)
                         .where(Molecule.target_id == target.id)
@@ -467,24 +619,16 @@ class DiscoveryPipeline:
         molecules: List[Molecule],
         skip_existing: bool,
     ) -> Dict[str, Any]:
-        """Step 3: 治疗方案匹配
-
-        两部分：
-        1. 逐靶点生成治疗方案（提取自 endpoints/treatments.py 的 _auto_generate_treatments）
-        2. 调用 TreatmentPlanner.optimize() 进行组合优化
-        """
         from app.services.optimizer.treatment_planner import TreatmentPlanner
 
         start = time.time()
         treatments_created = 0
         errors: List[str] = []
 
-        # Part A: 逐靶点生成治疗方案
         for target in targets:
             try:
                 gene = target.gene_symbol or "未知"
 
-                # 幂等检查：同名治疗方案已存在则跳过
                 if skip_existing:
                     existing_stmt = (
                         select(Treatment)
@@ -496,7 +640,6 @@ class DiscoveryPipeline:
                     if existing.scalar_one_or_none():
                         continue
 
-                # 查找该靶点关联的分子
                 target_mols = [m for m in molecules if m.target_id == target.id]
                 mol_ids = [str(m.id) for m in target_mols] if target_mols else None
 
@@ -551,7 +694,6 @@ class DiscoveryPipeline:
                 errors.append(f"靶点 {target.gene_symbol} 治疗方案生成失败: {e}")
                 logger.warning(f"治疗方案生成失败: {e}")
 
-        # Part B: 组合优化（调用 TreatmentPlanner）
         try:
             planner = TreatmentPlanner(self.db)
             optimize_result = await planner.optimize(project_id)
@@ -585,23 +727,16 @@ class DiscoveryPipeline:
         molecules: List[Molecule],
         hypothesis_config: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Step 4: 假设生成 — 复用 HypothesisGenerator
-
-        基于前序步骤产生的数据（靶点、分子）自动生成研究假设，
-        支持规则模式、LLM 模式和混合模式。
-        """
         from app.services.knowledge.hypothesis_generator import HypothesisGenerator
 
         start = time.time()
         generator = HypothesisGenerator(self.db)
 
-        # 构造上下文
-        use_llm = hypothesis_config.get("use_llm", False)
+        use_llm = hypothesis_config.get("use_llm", True)
         mode = hypothesis_config.get("mode", "hybrid")
         max_hypotheses = hypothesis_config.get("max_hypotheses", 5)
 
-        context = hypothesis_config.get("context", {})
-        # 从前序步骤补充数据到 context
+        context = hypothesis_config.get("context") or {}
         if targets and not context.get("de_genes"):
             context["de_genes"] = [
                 {"gene": t.gene_symbol, "confidence": t.confidence_score}
@@ -617,12 +752,11 @@ class DiscoveryPipeline:
                 for m in molecules[:20]
             ]
 
-        # 获取 LLM 客户端（如启用）
         llm_client = None
         if use_llm:
             try:
-                from app.services.llm.client import get_llm_client_with_config
-                llm_client, _ = await get_llm_client_with_config(self.db)
+                from app.core.deps import get_llm_client_with_config
+                llm_client = await get_llm_client_with_config(self.db)
             except Exception as e:
                 logger.warning(f"假设生成 LLM 客户端获取失败，降级规则模式: {e}")
 
@@ -637,7 +771,6 @@ class DiscoveryPipeline:
 
         duration = round(time.time() - start, 3)
 
-        # 持久化假设到数据库（如果 Hypothesis 模型可用）
         saved_count = 0
         try:
             from app.models.hypothesis import Hypothesis, HypothesisStatus
@@ -680,22 +813,6 @@ class DiscoveryPipeline:
         custom_steps: List[Dict[str, Any]],
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """执行自定义步骤
-
-        支持的自定义步骤类型：
-        - type=assess: 类药性批量评估
-        - type=dock: 分子对接
-        - type=analyze: 生信分析
-        - type=feedback: 反馈收集
-        - type=custom: 用户自定义（config 中提供 callback_module）
-
-        Args:
-            project_id: 项目 ID
-            custom_steps: 自定义步骤列表 [{name, type, config}]
-            context: 前序步骤的上下文数据
-        Returns:
-            {executed: [...], failed: [...], total: N}
-        """
         executed = []
         failed = []
 
@@ -727,11 +844,13 @@ class DiscoveryPipeline:
                 })
 
         return {
+            "status": PipelineStepStatus.SUCCESS if not failed else PipelineStepStatus.PARTIAL,
             "executed": executed,
             "failed": failed,
             "total": len(custom_steps),
             "success_count": len(executed),
             "failed_count": len(failed),
+            "duration_sec": 0,
         }
 
     async def _execute_custom_step(
@@ -741,15 +860,10 @@ class DiscoveryPipeline:
         project_id: UUID,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """执行单个自定义步骤
-
-        根据步骤类型路由到相应的服务。
-        """
         molecules = context.get("molecules", [])
         targets = context.get("targets", [])
 
         if step_type == "assess":
-            # 批量类药性评估
             from app.services.analyzer.molecule_designer import assess_druglikeness
             results = []
             for m in molecules[:step_config.get("limit", 50)]:
@@ -759,7 +873,6 @@ class DiscoveryPipeline:
             return {"assessed": len(results), "results": results}
 
         elif step_type == "dock":
-            # 分子对接（占位 — 需要 DiffDock 客户端）
             return {
                 "status": "skipped",
                 "reason": "对接步骤需要 DiffDock 客户端配置",
@@ -767,7 +880,6 @@ class DiscoveryPipeline:
             }
 
         elif step_type == "analyze":
-            # 生信分析（占位 — 需要数据集）
             return {
                 "status": "skipped",
                 "reason": "分析步骤需要数据集配置",
@@ -775,14 +887,12 @@ class DiscoveryPipeline:
             }
 
         elif step_type == "feedback":
-            # 反馈收集（占位）
             return {
                 "status": "skipped",
                 "reason": "反馈步骤需要临床数据配置",
             }
 
         elif step_type == "custom":
-            # 用户自定义 — 通过 callback_module 动态加载
             callback_module = step_config.get("callback_module")
             callback_function = step_config.get("callback_function", "execute")
             if not callback_module:

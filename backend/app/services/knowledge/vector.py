@@ -1,11 +1,45 @@
-"""向量存储服务 — ChromaDB 封装"""
+"""向量存储服务 — ChromaDB 封装
+
+注意：ChromaDB 的 HttpClient、get_or_create_collection、coll.add、coll.query
+均为同步阻塞调用。在 asyncio 事件循环中直接调用会卡死整个后端
+（health check 超时、其他请求无响应）。
+
+所有同步操作必须用 asyncio.to_thread() 包裹，避免阻塞事件循环。
+"""
+import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.core.deps import get_llm_client
 
 logger = logging.getLogger(__name__)
+
+
+def _connect_chromadb():
+    """同步：连接 ChromaDB（在 to_thread 中调用）"""
+    import chromadb
+    return chromadb.HttpClient(
+        host=settings.CHROMA_HOST,
+        port=settings.CHROMA_PORT,
+    )
+
+
+def _get_or_create_collection(client, name: str):
+    """同步：获取或创建集合（在 to_thread 中调用）"""
+    return client.get_or_create_collection(
+        name=name, metadata={"hnsw:space": "cosine"}
+    )
+
+
+def _coll_add(coll, ids, texts, metadatas, embeddings):
+    """同步：批量入库（在 to_thread 中调用）"""
+    coll.add(ids=ids, documents=texts, metadatas=metadatas, embeddings=embeddings)
+
+
+def _coll_query(coll, query_emb, top_k):
+    """同步：向量检索（在 to_thread 中调用）"""
+    return coll.query(query_embeddings=[query_emb], n_results=top_k)
 
 
 class VectorStore:
@@ -15,40 +49,40 @@ class VectorStore:
     """
 
     def __init__(self):
-        self._client = None
+        self._client: Optional[Any] = None
         self._collections: Dict[str, Any] = {}
 
-    def _get_client(self):
+    def _get_client_sync(self):
+        """同步获取客户端（仅用于已缓存场景的快速路径）"""
         if self._client is not None:
             return self._client
+        return None  # 未初始化，需要异步初始化
 
-        if settings.is_mock:
+    async def _get_collection(self, name: str):
+        """异步获取集合（包裹同步 ChromaDB 调用，避免阻塞事件循环）"""
+        # 快速路径：集合已缓存
+        if name in self._collections:
+            return self._collections[name]
+
+        # 需要客户端：首次连接或已连接
+        if self._client is None and not settings.is_mock:
+            try:
+                self._client = await asyncio.to_thread(_connect_chromadb)
+            except Exception as e:
+                logger.warning(f"ChromaDB 连接失败，降级为空检索: {e}")
+                self._client = None
+                return None
+
+        if settings.is_mock or self._client is None:
             return None
 
         try:
-            import chromadb
-            self._client = chromadb.HttpClient(
-                host=settings.CHROMA_HOST,
-                port=settings.CHROMA_PORT,
-            )
-            return self._client
+            coll = await asyncio.to_thread(_get_or_create_collection, self._client, name)
+            self._collections[name] = coll
+            return coll
         except Exception as e:
-            logger.warning(f"ChromaDB 连接失败，降级为空检索: {e}")
+            logger.warning(f"获取 ChromaDB 集合 {name} 失败: {e}")
             return None
-
-    def _get_collection(self, name: str):
-        client = self._get_client()
-        if client is None:
-            return None
-        if name not in self._collections:
-            try:
-                self._collections[name] = client.get_or_create_collection(
-                    name=name, metadata={"hnsw:space": "cosine"}
-                )
-            except Exception as e:
-                logger.warning(f"获取 ChromaDB 集合 {name} 失败: {e}")
-                return None
-        return self._collections[name]
 
     async def add_documents(self, documents: List[Dict[str, Any]], collection: str = "default") -> int:
         """文档向量化入库
@@ -62,7 +96,7 @@ class VectorStore:
         if not documents:
             return 0
 
-        coll = self._get_collection(collection)
+        coll = await self._get_collection(collection)
         if coll is None:
             logger.info(f"[Mock] 向量存储跳过 {len(documents)} 文档")
             return 0
@@ -85,7 +119,7 @@ class VectorStore:
                 return 0
 
         try:
-            coll.add(ids=ids, documents=texts, metadatas=metadatas, embeddings=embeddings)
+            await asyncio.to_thread(_coll_add, coll, ids, texts, metadatas, embeddings)
             return len(ids)
         except Exception as e:
             logger.error(f"向量入库失败: {e}")
@@ -98,7 +132,7 @@ class VectorStore:
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
         """相似度检索"""
-        coll = self._get_collection(collection)
+        coll = await self._get_collection(collection)
         if coll is None:
             return []
 
@@ -110,7 +144,9 @@ class VectorStore:
             return []
 
         try:
-            results = coll.query(query_embeddings=[query_emb], n_results=top_k)
+            # 关键修复：coll.query 是同步阻塞调用，必须用 to_thread 包裹
+            # 否则会卡死 asyncio 事件循环，导致后端 health check 超时
+            results = await asyncio.to_thread(_coll_query, coll, query_emb, top_k)
         except Exception as e:
             logger.error(f"向量检索失败: {e}")
             return []
@@ -132,7 +168,7 @@ class VectorStore:
         return out
 
 
-_vector_store_singleton: VectorStore = None
+_vector_store_singleton: Optional[VectorStore] = None
 
 
 def get_vector_store() -> VectorStore:

@@ -1,5 +1,5 @@
 """实验模型 — 干湿闭环（Dry-Wet Loop）"""
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID as UUIDType
 
 from sqlalchemy import Float, ForeignKey, JSON, String, Text
@@ -35,6 +35,10 @@ class Experiment(Base, UUIDMixin, TimestampMixin):
     target_id: Mapped[Optional[UUIDType]] = mapped_column(ForeignKey("targets.id"))
     molecule_id: Mapped[Optional[UUIDType]] = mapped_column(ForeignKey("molecules.id"))
     treatment_id: Mapped[Optional[UUIDType]] = mapped_column(ForeignKey("treatments.id"))
+    # Phase B4 反馈闭环：关联 Co-Scientist 假设，将湿实验结果反馈到假设评估
+    hypothesis_id: Mapped[Optional[UUIDType]] = mapped_column(
+        ForeignKey("hypotheses.id"), nullable=True, index=True
+    )
     config: Mapped[Optional[dict]] = mapped_column(JSON)  # 实验配置
     result: Mapped[Optional[dict]] = mapped_column(JSON)  # 实验结果（IC50/存活率/肿瘤体积等）
     success: Mapped[Optional[bool]] = mapped_column()  # 实验是否验证成功
@@ -43,11 +47,19 @@ class Experiment(Base, UUIDMixin, TimestampMixin):
     lab_source: Mapped[Optional[str]] = mapped_column(String(200))  # 实验室来源
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
+    # 失败数据价值化：失败原因沉淀
+    failure_reason: Mapped[Optional[dict]] = mapped_column(JSON)
+    failure_params: Mapped[Optional[dict]] = mapped_column(JSON)
+    wrong_path_proof: Mapped[Optional[str]] = mapped_column(Text)
+
     # 关联
     project = relationship("Project", back_populates="experiments")
     target = relationship("Target", back_populates="experiments")
     molecule = relationship("Molecule", back_populates="experiments")
     treatment = relationship("Treatment", back_populates="experiments")
+    # Phase B4：假设关联（单向，不强制 back_populates 以避免侵入 Hypothesis 模型）
+    hypothesis = relationship("Hypothesis", foreign_keys=[hypothesis_id])
+    failure_knowledge: Mapped[List["FailureKnowledge"]] = relationship("FailureKnowledge", back_populates="experiment")
 
     def __repr__(self) -> str:
         return f"<Experiment {self.name} ({self.exp_type})>"

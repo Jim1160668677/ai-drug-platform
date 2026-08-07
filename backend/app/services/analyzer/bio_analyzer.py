@@ -140,8 +140,14 @@ class BioAnalyzer:
                 [round(float(expression_data[g][j]), 4) for j in range(min(len(expression_data[g]), 20))]
                 for g in top_genes
             ]
+            # labels 字典 {gene: cluster_id}，便于下游直接查询节点归属
+            # （修复测试读取 labels 键得 0 节点的问题，保持向后兼容）
+            labels_dict = {c["gene"]: c["cluster_id"] for c in clusters}
             return {
                 "clusters": clusters,
+                "labels": labels_dict,
+                "n_nodes": len(clusters),
+                "n_clusters_found": len(set(labels.tolist())),
                 "cluster_centers": centers,
                 "method": method,
                 "n_clusters": n_clusters,

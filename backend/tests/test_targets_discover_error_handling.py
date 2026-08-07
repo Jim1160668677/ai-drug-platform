@@ -110,10 +110,22 @@ class TestDiscoverErrorHandling:
 
     @pytest.mark.asyncio
     async def test_discover_handles_exception_returns_success_false(
-        self, client: AsyncClient, auth_headers: dict
+        self, client: AsyncClient, auth_headers: dict, db_session: AsyncSession
     ):
         """discover() 抛出非 AppException 异常时返回 200 + success=False"""
-        project_id = uuid.uuid4()
+        # 先在 DB 创建项目，避免被前置项目存在性校验拦截（404）
+        from app.models.project import Project
+        from datetime import datetime, timezone
+        project = Project(
+            name="discover-error-test",
+            description="测试 discover 异常处理",
+            owner_id=TEST_USER_ID,
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(project)
+        await db_session.flush()
+        project_id = project.id
 
         async def mock_discover(*args, **kwargs):
             raise RuntimeError("模拟的内部错误")

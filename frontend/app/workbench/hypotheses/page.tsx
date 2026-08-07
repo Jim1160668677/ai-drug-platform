@@ -32,7 +32,7 @@ export default function HypothesesPage() {
     enabled: !!currentProject,
   });
 
-  const hypList: any[] = (hypotheses as any)?.items || (Array.isArray(hypotheses) ? hypotheses : []) || [];
+  const hypList: any[] = ((hypotheses as any)?.data ?? (hypotheses as any)?.items) || (Array.isArray(hypotheses) ? hypotheses : []) || [];
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -91,7 +91,13 @@ export default function HypothesesPage() {
       const hyps = Array.isArray(data) ? data : (data?.data || []);
       setAutoGenResult(hyps);
       setShowAutoGen(true);
-      toast.success('生成完成', `自动生成了 ${hyps.length} 个假设`);
+      // 关键修复：自动生成的假设已写入数据库，刷新列表才能显示
+      queryClient.invalidateQueries({ queryKey: ['hypotheses', currentProject?.id] });
+      const persistedCount = hyps.filter((h: any) => h.persisted !== false).length;
+      toast.success(
+        '生成完成',
+        `自动生成了 ${hyps.length} 个假设（其中 ${persistedCount} 个已写入列表，请到列表查看）`
+      );
     },
     onError: (err: any) => {
       toast.error('生成失败', err?.response?.data?.error?.message || '请稍后重试');
@@ -367,6 +373,15 @@ export default function HypothesesPage() {
                       <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs">
                         {h.category || 'general'}
                       </span>
+                      {h.persisted === false ? (
+                        <span className="px-2 py-0.5 bg-red-50 text-red-700 rounded text-xs border border-red-200">
+                          未保存
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs border border-green-200">
+                          ✓ 已保存到列表
+                        </span>
+                      )}
                     </div>
                   </div>
                   <p className="text-sm text-gray-600 mb-3">{h.description}</p>
@@ -399,7 +414,7 @@ export default function HypothesesPage() {
 
 // ========== 假设详细报告组件 ==========
 function HypothesisReport({ hypothesisId, onClose }: { hypothesisId: string; onClose: () => void }) {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, isError, refetch } = useQuery({
     queryKey: ['hypothesis-detail', hypothesisId],
     queryFn: () => getHypothesisDetail(hypothesisId),
   });

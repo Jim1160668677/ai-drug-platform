@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.user import User
 from app.api.v1.schemas import StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
+from app.services.coscientist.hooks import on_experiment_completed, on_experiment_failed
 
 router = APIRouter()
 
@@ -119,7 +120,19 @@ async def submit_result(
     # 触发模型权重反馈（干湿闭环核心）
     from app.services.experiment.feedback_loop import FeedbackLoop
     loop = FeedbackLoop(db)
-    feedback = await loop.apply_feedback(exp)
+    feedback = await loop.run_closure(exp)
+
+    # Co-Scientist auto-trigger hook
+    if payload.success:
+        await on_experiment_completed(
+            db=db, user=current_user, project_id=str(exp.project_id) if exp.project_id else None,
+            experiment_id=str(exp.id), experiment_name=exp.name,
+        )
+    else:
+        await on_experiment_failed(
+            db=db, user=current_user, project_id=str(exp.project_id) if exp.project_id else None,
+            experiment_id=str(exp.id), experiment_name=exp.name,
+        )
 
     return StandardResponse(message="实验结果已提交，模型反馈已触发", data=feedback)
 

@@ -172,7 +172,23 @@ class TestTargetIdentifier:
         from app.services.analyzer.target_identifier import TargetIdentifier
 
         identifier = TargetIdentifier(MagicMock())
-        # Pathogenic 变异 + 差异表达 + PPI + 获批药物 → 高置信度
+        # Pathogenic 变异 + 差异表达 + PPI + 获批药物 + CNV 扩增 → 高置信度
+        # EGFR 扩增是 NSCLC 常见驱动事件，验证多组学置信度计算
+        score = identifier._compute_confidence(
+            gene="EGFR",
+            variants=[{"clinvar": {"clnsig": "Pathogenic"}}],
+            neighbors=[{"gene": "KRAS"}, {"gene": "BRAF"}],
+            approved_drugs=[{"name": "Osi"}],
+            diff_genes_set={"EGFR"},
+            cnv_segments=[{"gene": "EGFR", "type": "amplification", "copy_number": 8}],
+        )
+        assert 0.5 < score <= 1.0
+
+    def test_compute_confidence_without_cnv_legacy(self):
+        """无 CNV 数据时（向后兼容）也应产生合理置信度（>0.4）"""
+        from app.services.analyzer.target_identifier import TargetIdentifier
+
+        identifier = TargetIdentifier(MagicMock())
         score = identifier._compute_confidence(
             gene="EGFR",
             variants=[{"clinvar": {"clnsig": "Pathogenic"}}],
@@ -180,7 +196,8 @@ class TestTargetIdentifier:
             approved_drugs=[{"name": "Osi"}],
             diff_genes_set={"EGFR"},
         )
-        assert 0.5 < score <= 1.0
+        # 无 CNV 数据 → CNV 维度得 0，但其他维度仍应给出合理分（>0.4）
+        assert 0.4 < score <= 1.0
 
     def test_compute_confidence_empty(self):
         from app.services.analyzer.target_identifier import TargetIdentifier

@@ -1,0 +1,87 @@
+# 靶点发现推理规则集
+# 当项目产生新靶点时，根据置信度/证据等级/成药性自动触发后续推理
+ruleset:
+  name: target_discovery_rules
+  version: "1.0"
+  description: 靶点发现推理规则 — 自动评估靶点优先级并触发后续推理
+  rules:
+    - id: high_confidence_target
+      name: 高置信度靶点识别
+      description: 置信度≥0.7 且证据强 → 标记高优先级并触发成药性评估
+      when:
+        all:
+          - field: target.confidence_score
+            op: ">="
+            value: 0.7
+          - field: target.evidence_grade
+            op: "=="
+            value: "strong"
+      then:
+        - action: set_field
+          target: target.priority
+          value: "high"
+        - action: trigger_reasoning
+          params:
+            goal: 评估高置信度靶点 {target.gene_symbol} 的成药性与老药重定位潜力
+        - action: log
+          message: 高置信度靶点已触发成药性评估
+      priority: 10
+      tags: [target, drug_repurposing]
+
+    - id: medium_confidence_target
+      name: 中置信度靶点识别
+      description: 置信度 0.4-0.7 → 标记中优先级
+      when:
+        all:
+          - field: target.confidence_score
+            op: ">="
+            value: 0.4
+          - field: target.confidence_score
+            op: "<"
+            value: 0.7
+      then:
+        - action: set_field
+          target: target.priority
+          value: "medium"
+        - action: log
+          message: 中置信度靶点，建议补充证据
+      priority: 5
+      tags: [target]
+
+    - id: low_confidence_target
+      name: 低置信度靶点标记
+      description: 置信度<0.4 → 标记低优先级
+      when:
+        all:
+          - field: target.confidence_score
+            op: "<"
+            value: 0.4
+      then:
+        - action: set_field
+          target: target.priority
+          value: "low"
+        - action: log
+          message: 低置信度靶点，需进一步验证
+      priority: 1
+      tags: [target]
+
+    - id: approved_drug_target
+      name: 已有上市药物靶点
+      description: 靶点已有上市药物 → 触发老药重定位推理
+      when:
+        all:
+          - field: target.approved_drugs
+            op: exists
+            value: null
+          - field: target.approved_drugs
+            op: "not_in"
+            value: []
+      then:
+        - action: set_field
+          target: target.repurposing_potential
+          value: "high"
+        - action: trigger_reasoning
+          params:
+            goal: 靶点 {target.gene_symbol} 已有上市药物，推理老药重定位候选
+      priority: 8
+      tags: [target, drug_repurposing]

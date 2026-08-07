@@ -1,7 +1,7 @@
 """审计日志模型 — 不可篡改的 append-only 日志"""
 from typing import Optional
 
-from sqlalchemy import BigInteger, JSON, String, Text
+from sqlalchemy import BigInteger, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -15,7 +15,13 @@ class AuditLog(Base, TimestampMixin):
 
     __tablename__ = "audit_logs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # 修复：SQLite 只对 INTEGER PRIMARY KEY 自增，BigInteger 不行
+    # 用 with_variant 在 SQLite 上映射为 Integer，PostgreSQL 上保持 BigInt
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     actor: Mapped[str] = mapped_column(String(200), nullable=False, index=True)  # 操作者
     role: Mapped[Optional[str]] = mapped_column(String(50))  # 操作者角色
     action: Mapped[str] = mapped_column(String(100), nullable=False, index=True)  # 动作类型

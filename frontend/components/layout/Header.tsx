@@ -28,8 +28,18 @@ export default function Header() {
   }, [user, setUser]);
 
   useEffect(() => {
-    if (!currentProject && projects && projects.length > 0) {
-      setProject(projects[0]);
+    // 修复：currentProject 持久化在 localStorage，数据库重置后可能指向已删除的项目
+    // 验证 currentProject 是否仍在 projects 列表中，若不在则清除并自动选择第一个
+    if (projects && projects.length > 0) {
+      if (!currentProject) {
+        setProject(projects[0]);
+      } else if (!projects.find((p: any) => p.id === currentProject.id)) {
+        // currentProject 已过期（数据库中不存在），切换到第一个可用项目
+        setProject(projects[0]);
+      }
+    } else if (projects && projects.length === 0 && currentProject) {
+      // 无任何项目，清除过期引用
+      setProject(null);
     }
   }, [projects, currentProject, setProject]);
 
@@ -39,9 +49,9 @@ export default function Header() {
 
   return (
     <header className="bg-white border-b border-gray-200">
-      {/* Mock 模式提示条 */}
-      <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-1.5 text-xs text-yellow-800 text-center">
-        当前为 Mock 模式 — 配置 API key 后可切换真实模式
+      {/* 模式提示条 */}
+      <div className="bg-green-50 border-b border-green-200 px-4 py-1.5 text-xs text-green-800 text-center">
+        真实模式运行中 — 大模型 Agnes（agnes-2.0-flash）已集成，生信分析工具已就绪
       </div>
 
       <div className="flex items-center justify-between h-14 px-6">

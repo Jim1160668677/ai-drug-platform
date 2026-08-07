@@ -96,7 +96,7 @@ async def record_outcome(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """记录疗效结局
+    """记录疗效结局（持久化到 Treatment.monitoring_data）
 
     若未提供 response 但提供了 lesions，将自动调用 RECIST 1.1 分类。
     """
@@ -108,7 +108,14 @@ async def record_outcome(
             treatment_id=payload.treatment_id,
             outcome=payload.outcome,
         )
+        if result.get("error"):
+            raise NotFoundError(
+                result["error"],
+                details={"treatment_id": str(payload.treatment_id)},
+            )
+        await db.commit()
     except Exception as e:
+        await db.rollback()
         logger.error("记录疗效结局失败: %s", e, exc_info=True)
         raise UpstreamError(
             "记录疗效结局失败（内部错误，详见日志）",
@@ -124,7 +131,7 @@ async def record_adverse_event(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """记录不良事件并自动 CTCAE v5.0 分级（1-5 级）"""
+    """记录不良事件并自动 CTCAE v5.0 分级（1-5 级），持久化到 Treatment.monitoring_data"""
     from app.services.optimizer.efficacy_monitor import EfficacyMonitor
 
     try:
@@ -133,7 +140,14 @@ async def record_adverse_event(
             treatment_id=payload.treatment_id,
             event=payload.event,
         )
+        if result.get("error"):
+            raise NotFoundError(
+                result["error"],
+                details={"treatment_id": str(payload.treatment_id)},
+            )
+        await db.commit()
     except Exception as e:
+        await db.rollback()
         logger.error("记录不良事件失败: %s", e, exc_info=True)
         raise UpstreamError(
             "记录不良事件失败（内部错误，详见日志）",

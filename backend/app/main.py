@@ -18,6 +18,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.limiter import limiter
 from app.core.logging import setup_logging
 from app.core.middleware import EnvelopeMiddleware
+from app.core.observability.middleware import MetricsMiddleware
 from app.schemas.common import ApiResponse, ResponseMeta, success_response
 
 
@@ -122,6 +123,11 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-Request-ID", "Accept", "X-Requested-With"],
     expose_headers=["X-Request-ID", "X-Response-Time-ms"],
 )
+
+# 指标采集中间件 — Phase F: 自动采集 HTTP 请求计数/延迟
+# 必须在 EnvelopeMiddleware 外层，以捕获所有响应（包括信封注入失败的情况）
+if getattr(settings, "METRICS_ENABLED", True):
+    app.add_middleware(MetricsMiddleware)
 
 # 统一信封中间件 — 注入 X-Request-ID / X-Response-Time-ms / meta.duration_ms
 # 必须在 SlowAPIMiddleware 内部，否则 BaseHTTPMiddleware 的 body 分块会破坏信封注入

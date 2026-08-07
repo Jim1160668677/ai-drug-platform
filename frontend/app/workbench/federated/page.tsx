@@ -51,8 +51,7 @@ export default function FederatedPage() {
   });
 
   const jobList: any[] =
-    (jobs as any)?.items ||
-    (jobs as any)?.data?.items ||
+    ((jobs as any)?.data ?? (jobs as any)?.items) ||
     (Array.isArray(jobs) ? jobs : []) ||
     [];
 

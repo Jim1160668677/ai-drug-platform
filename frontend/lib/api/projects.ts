@@ -5,3 +5,6 @@ import { api } from './client';
 export const getProjects = () => api.get('/projects').then((r) => r.data);
 export const createProject = (payload: Record<string, unknown>) =>
   api.post('/projects', payload).then((r) => r.data);
+
+export const archiveProject = (projectId: string) =>
+  api.delete(`/projects/${projectId}`).then((r) => r.data);

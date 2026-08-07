@@ -48,6 +48,13 @@ export const exportDataset = (datasetId: string, format: string, analysisType?: 
     .post(`/data/${datasetId}/export`, { format, analysis_type: analysisType })
     .then((r) => r.data?.data ?? r.data);
 
+// ========== 专业数据分析报告 ==========
+
+export const generateFullReport = (datasetId: string, useLlm = true) =>
+  api
+    .post('/data/analysis/full-report', { dataset_id: datasetId, use_llm: useLlm })
+    .then((r) => r.data?.data ?? r.data);
+
 export const importDataFile = (projectId: string, name: string, file: File) => {
   const formData = new FormData();
   formData.append('file', file);

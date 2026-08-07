@@ -29,34 +29,36 @@ api.interceptors.request.use(
 // 响应拦截器：信封解包 + 401 跳登录 + 500 提示
 api.interceptors.response.use(
   (response) => {
-    // 后端信封中间件统一返回 {success, data, meta}，这里解包让业务代码直接拿 data。
-    // 兼容未走信封的裸响应（如 /auth/login 直接返回 TokenResponse）。
     const payload = response.data;
     if (
       payload &&
       typeof payload === 'object' &&
       payload.success === true &&
-      'data' in payload &&
-      'meta' in payload
+      'data' in payload
     ) {
       response.data = payload.data;
     }
     return response;
   },
   (error) => {
+    if (error.code === 'ERR_ABORTED' || error.code === 'ECONNABORTED') {
+      console.warn('[API] 请求被中止/超时:', error.config?.url);
+      return Promise.reject(error);
+    }
     if (error.response) {
       const { status, data } = error.response;
       if (status === 401 && typeof window !== 'undefined') {
         localStorage.removeItem('ai_drug_token');
         localStorage.removeItem('ai_drug_user');
         if (window.location.pathname !== '/') {
-          // SPA 导航：避免全页面刷新丢失 React Query 缓存
           window.history.replaceState(null, '', '/');
           window.dispatchEvent(new PopStateEvent('popstate'));
         }
       } else if (status >= 500) {
         console.error('[API Error]', status, data);
       }
+    } else if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
+      console.error('[API] 网络错误：后端服务可能未启动', error.message);
     }
     return Promise.reject(error);
   }

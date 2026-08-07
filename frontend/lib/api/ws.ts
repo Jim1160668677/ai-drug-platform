@@ -11,6 +11,7 @@
  * - 3 次 WS 失败后降级到 HTTP 轮询
  */
 import type { TaskProgress } from '@/types/api';
+import type { WSEvent, WSClientMessage } from '@/types/agent';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1';
 
@@ -219,6 +220,199 @@ export class TaskProgressClient {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+  }
+}
+
+// ========== AgentWebSocket — 会话级多任务事件订阅 ==========
+
+export interface AgentWSOptions {
+  sessionId: string;
+  token: string;
+  /** 重连最大次数（默认 5） */
+  maxRetries?: number;
+  /** 初始重连延迟（毫秒，默认 1000） */
+  initialRetryDelay?: number;
+  /** 心跳间隔（毫秒，默认 30000） */
+  heartbeatInterval?: number;
+}
+
+export interface AgentWSCallbacks {
+  /** 通用事件分发 */
+  onEvent?: (event: WSEvent) => void;
+  onConnected?: () => void;
+  onDisconnected?: () => void;
+  onError?: (error: Event) => void;
+}
+
+/**
+ * AgentWebSocket — 会话级 WebSocket 客户端
+ *
+ * 与 TaskProgressClient 的差异：
+ * 1. URL 形如 ${WS_BASE}/agent/ws/${sessionId}?token=xxx
+ * 2. 订阅整个会话的所有任务事件（不只是单个任务）
+ * 3. 终态事件不主动断开（会话内可连续发起多个任务）
+ * 4. 心跳：30s ping，与服务端 30s receive_timeout 对齐
+ * 5. 重连：指数退避，最多 5 次
+ *
+ * 客户端可发送消息：subscribe / unsubscribe / cancel / confirm / ping
+ */
+export class AgentWebSocket {
+  private ws: WebSocket | null = null;
+  private options: Required<Omit<AgentWSOptions, 'sessionId' | 'token'>> &
+    Pick<AgentWSOptions, 'sessionId' | 'token'>;
+  private callbacks: AgentWSCallbacks;
+  private retryCount = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private disposed = false;
+
+  constructor(options: AgentWSOptions, callbacks: AgentWSCallbacks = {}) {
+    this.options = {
+      maxRetries: options.maxRetries ?? 5,
+      initialRetryDelay: options.initialRetryDelay ?? 1000,
+      heartbeatInterval: options.heartbeatInterval ?? 30000,
+      sessionId: options.sessionId,
+      token: options.token,
+    };
+    this.callbacks = callbacks;
+  }
+
+  /** 建立 WebSocket 连接 */
+  connect(): void {
+    if (this.disposed) return;
+
+    const wsUrl = `${WS_BASE}/agent/ws/${this.options.sessionId}?token=${encodeURIComponent(
+      this.options.token
+    )}`;
+    try {
+      this.ws = new WebSocket(wsUrl);
+    } catch (err) {
+      console.error('[AgentWS] 构造失败:', err);
+      this.callbacks.onError?.(new Event('error'));
+      return;
+    }
+
+    this.ws.onopen = () => {
+      this.retryCount = 0;
+      this.callbacks.onConnected?.();
+      this.startHeartbeat();
+    };
+
+    this.ws.onmessage = (event) => {
+      try {
+        const data: WSEvent = JSON.parse(event.data);
+        this.callbacks.onEvent?.(data);
+      } catch (err) {
+        console.warn('[AgentWS] 消息解析失败:', err);
+      }
+    };
+
+    this.ws.onerror = (event) => {
+      this.callbacks.onError?.(event);
+    };
+
+    this.ws.onclose = () => {
+      this.stopHeartbeat();
+      this.callbacks.onDisconnected?.();
+      if (!this.disposed) {
+        this.scheduleReconnect();
+      }
+    };
+  }
+
+  /** 主动断开连接 */
+  disconnect(): void {
+    this.disposed = true;
+    this.stopHeartbeat();
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
+      if (
+        this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING
+      ) {
+        this.ws.close();
+      }
+      this.ws = null;
+    }
+  }
+
+  /** 发送客户端消息 */
+  send(message: WSClientMessage): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try {
+        this.ws.send(JSON.stringify(message));
+      } catch (err) {
+        console.warn('[AgentWS] 发送失败:', err);
+      }
+    }
+  }
+
+  /** 订阅特定任务进度 */
+  subscribe(taskId: string): void {
+    this.send({ type: 'subscribe', task_id: taskId });
+  }
+
+  /** 取消订阅 */
+  unsubscribe(taskId: string): void {
+    this.send({ type: 'unsubscribe', task_id: taskId });
+  }
+
+  /** 取消任务 */
+  cancel(taskId: string): void {
+    this.send({ type: 'cancel', task_id: taskId });
+  }
+
+  /** 确认副作用工具 */
+  confirm(taskId: string, approved: boolean): void {
+    this.send({ type: 'confirm', task_id: taskId, payload: { approved } });
+  }
+
+  /** 主动 ping */
+  ping(): void {
+    this.send({ type: 'ping' });
+  }
+
+  /** 调度重连（指数退避） */
+  private scheduleReconnect(): void {
+    if (this.retryCount >= this.options.maxRetries) {
+      console.warn('[AgentWS] 超过最大重试次数，停止重连');
+      return;
+    }
+
+    const delay = this.options.initialRetryDelay * Math.pow(2, this.retryCount);
+    this.retryCount += 1;
+    this.retryTimer = setTimeout(() => {
+      if (!this.disposed) {
+        this.connect();
+      }
+    }, delay);
+  }
+
+  /** 启动心跳 */
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+        } catch {
+          // 忽略发送失败
+        }
+      }
+    }, this.options.heartbeatInterval);
+  }
+
+  /** 停止心跳 */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 }

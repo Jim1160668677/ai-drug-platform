@@ -41,6 +41,14 @@ def _make_treatment(*, name="Test Treatment", project_id=None):
     )
 
 
+def _async_db(*, treatment=None):
+    """构造可 await 的 db mock：get 返回指定治疗对象，flush 为 AsyncMock"""
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=treatment if treatment is not None else _make_treatment())
+    db.flush = AsyncMock()
+    return db
+
+
 def _make_experiment(
     *,
     name="exp",
@@ -50,6 +58,7 @@ def _make_experiment(
     treatment_id=None,
 ):
     """构造一个 Experiment-like SimpleNamespace 对象"""
+    from datetime import datetime
     return SimpleNamespace(
         id=uuid4(),
         project_id=uuid4(),
@@ -66,6 +75,7 @@ def _make_experiment(
         iteration=1,
         lab_source=None,
         notes=None,
+        created_at=datetime(2026, 1, 1),
     )
 
 
@@ -832,7 +842,7 @@ class TestEfficacyMonitorRecordOutcome:
     @pytest.mark.asyncio
     async def test_record_outcome_with_explicit_response(self):
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         tid = uuid4()
         result = await monitor.record_outcome(tid, {"response": "PR"})
@@ -845,7 +855,7 @@ class TestEfficacyMonitorRecordOutcome:
     async def test_record_outcome_classifies_lesions_when_no_response(self):
         """无 response 但有 lesions 时应调用 _recist_classify"""
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         tid = uuid4()
         lesions = [{"baseline_mm": 100, "current_mm": 50}]  # PR
@@ -857,7 +867,7 @@ class TestEfficacyMonitorRecordOutcome:
     @pytest.mark.asyncio
     async def test_record_outcome_cr_when_lesions_shrink_to_zero(self):
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         lesions = [{"baseline_mm": 100, "current_mm": 0}]  # CR
         result = await monitor.record_outcome(uuid4(), {"lesions": lesions})
@@ -868,7 +878,7 @@ class TestEfficacyMonitorRecordOutcome:
     async def test_record_outcome_no_response_no_lesions(self):
         """无 response 也无 lesions 时 response 应为 None"""
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         result = await monitor.record_outcome(uuid4(), {})
 
@@ -879,7 +889,7 @@ class TestEfficacyMonitorRecordOutcome:
     async def test_record_outcome_empty_lesions_does_not_classify(self):
         """lesions 为空列表时（falsy），不应触发 _recist_classify"""
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         result = await monitor.record_outcome(uuid4(), {"response": None, "lesions": []})
 
@@ -895,7 +905,7 @@ class TestEfficacyMonitorRecordAdverseEvent:
     @pytest.mark.asyncio
     async def test_record_adverse_event_grade_5(self):
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         tid = uuid4()
         event = {"symptom": "死亡", "description": "patient death", "severity": "5"}
@@ -909,7 +919,7 @@ class TestEfficacyMonitorRecordAdverseEvent:
     @pytest.mark.asyncio
     async def test_record_adverse_event_grade_1_default(self):
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         event = {"symptom": "mild nausea"}
         result = await monitor.record_adverse_event(uuid4(), event)
@@ -921,7 +931,7 @@ class TestEfficacyMonitorRecordAdverseEvent:
     async def test_record_adverse_event_missing_symptom(self):
         """event 缺 symptom 键时应返回 None"""
         from app.services.optimizer.efficacy_monitor import EfficacyMonitor
-        monitor = EfficacyMonitor(MagicMock())
+        monitor = EfficacyMonitor(_async_db())
 
         result = await monitor.record_adverse_event(uuid4(), {"severity": "3"})
 

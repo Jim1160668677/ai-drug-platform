@@ -45,6 +45,9 @@ async def parse_dataset(dataset, db=None) -> Dict[str, Any]:
     elif data_type in (DataType.WES, DataType.WGS, DataType.VCF):
         from app.services.parser.vcf import VcfParser
         parser = VcfParser()
+    elif data_type == DataType.SNP_CHIP:
+        from app.services.parser.snp_chip import SnpChipParser
+        parser = SnpChipParser()
     elif data_type == DataType.FASTA:
         from app.services.parser.fasta import FastaParser
         parser = FastaParser()
@@ -54,6 +57,24 @@ async def parse_dataset(dataset, db=None) -> Dict[str, Any]:
     elif data_type == DataType.METABOLOMICS:
         from app.services.parser.metabolomics import MetabolomicsParser
         parser = MetabolomicsParser()
+    elif data_type == DataType.DICOM:
+        from app.services.parser.dicom import DicomParser
+        parser = DicomParser()
+    elif data_type == DataType.MULTIQC:
+        from app.services.parser.multiqc import MultiqcParser
+        parser = MultiqcParser()
+    elif data_type == DataType.CNV:
+        # CNV 段表 — 用通用 TSV 解析并提取 cnv_segments
+        from app.services.parser.cnv import CnvParser
+        parser = CnvParser()
+    elif data_type == DataType.XENIUM:
+        # Xenium 空间转录组聚类结果（Barcode,Cluster）
+        from app.services.parser.xenium import XeniumParser
+        parser = XeniumParser()
+    elif data_type == DataType.NEOANTIGEN:
+        # 新抗原表位预测结果（HLA/肽段/IC50）
+        from app.services.parser.neoantigen import NeoantigenParser
+        parser = NeoantigenParser()
     elif data_type == DataType.GENE_REPORT:
         # 基因检测报告 — 仅返回元数据摘要
         import os

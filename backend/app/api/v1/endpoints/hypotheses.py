@@ -272,8 +272,8 @@ async def auto_generate_hypotheses(
     llm_client = None
     if use_llm:
         try:
-            from app.services.llm.client import get_llm_client_with_config
-            llm_client, _ = await get_llm_client_with_config(db)
+            from app.core.deps import get_llm_client_with_config
+            llm_client = await get_llm_client_with_config(db)
         except Exception as e:
             logger.warning(f"LLM 客户端获取失败，降级规则生成: {e}")
 
@@ -281,4 +281,50 @@ async def auto_generate_hypotheses(
         str(project_id), context, max_hypotheses,
         use_llm=use_llm, llm_client=llm_client, mode=mode,
     )
-    return success_response(hypotheses)
+
+    # 持久化到数据库 — 让生成的假设出现在列表中（修复：之前仅返回未写入 DB）
+    persisted: List[Dict[str, Any]] = []
+    for h in hypotheses:
+        try:
+            name = (h.get("title") or h.get("name") or "自动生成假设")[:200]
+            description = h.get("description") or ""
+            mechanism = h.get("category") or ""
+            strategy = h.get("verification_method") or ""
+            analysis_config = {
+                "supporting_evidence": h.get("supporting_evidence") or [],
+                "category": h.get("category"),
+                "mode": mode,
+                "use_llm": use_llm,
+                "auto_generated": True,
+            }
+            analysis_result = {
+                "confidence": h.get("confidence"),
+                "verification_method": h.get("verification_method"),
+                "supporting_evidence": h.get("supporting_evidence") or [],
+                "summary": h.get("description"),
+            }
+            hyp = Hypothesis(
+                project_id=project_id,
+                name=name,
+                description=description,
+                mechanism=mechanism,
+                strategy=strategy,
+                status=HypothesisStatus.DRAFT,
+                analysis_config=analysis_config,
+                analysis_result=analysis_result,
+                created_by=current_user.id,
+            )
+            db.add(hyp)
+            await db.flush()
+            persisted.append({
+                **h,
+                "id": str(hyp.id),
+                "persisted": True,
+                "hypothesis_id": str(hyp.id),
+            })
+        except Exception as e:
+            logger.warning(f"持久化假设失败（继续后续）: {e}", exc_info=True)
+            persisted.append({**h, "persisted": False, "error": str(e)})
+
+    await db.commit()
+    return success_response(persisted)

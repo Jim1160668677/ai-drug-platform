@@ -1,0 +1,111 @@
+# 分析流程规则集
+# 数据解析完成后，根据数据类型与质量自动触发对应分析流程
+ruleset:
+  name: analysis_pipeline_rules
+  version: "1.0"
+  description: 分析流程规则 — 数据解析后自动触发对应分析与解读
+  rules:
+    - id: rna_seq_pipeline
+      name: RNA-Seq 数据分析触发
+      description: RNA-Seq 数据解析完成 → 触发差异表达与通路富集分析
+      when:
+        all:
+          - field: dataset.data_type
+            op: "=="
+            value: "rna_seq"
+          - field: dataset.parse_status
+            op: "=="
+            value: "completed"
+      then:
+        - action: set_field
+          target: dataset.next_step
+          value: "differential_expression"
+        - action: call_plugin
+          params:
+            name: collect_evidence
+            params:
+              trigger_event: data_parsed
+        - action: log
+          message: RNA-Seq 数据已触发差异表达分析流程
+      priority: 10
+      tags: [pipeline, rna_seq]
+
+    - id: proteomics_pipeline
+      name: 蛋白质组数据分析触发
+      when:
+        all:
+          - field: dataset.data_type
+            op: "=="
+            value: "proteomics"
+          - field: dataset.parse_status
+            op: "=="
+            value: "completed"
+      then:
+        - action: set_field
+          target: dataset.next_step
+          value: "protein_differential"
+        - action: log
+          message: 蛋白质组数据已触发差异蛋白分析
+      priority: 9
+      tags: [pipeline, proteomics]
+
+    - id: single_cell_pipeline
+      name: 单细胞数据分析触发
+      when:
+        all:
+          - field: dataset.data_type
+            op: "=="
+            value: "single_cell"
+          - field: dataset.parse_status
+            op: "=="
+            value: "completed"
+      then:
+        - action: set_field
+          target: dataset.next_step
+          value: "clustering"
+        - action: trigger_reasoning
+          params:
+            goal: 基于单细胞聚类结果推理细胞亚群功能与疾病关联
+      priority: 9
+      tags: [pipeline, single_cell]
+
+    - id: low_quality_data_alert
+      name: 低质量数据告警
+      description: 数据质控不达标 → 标记需重新处理
+      when:
+        any:
+          - field: dataset.quality_metrics.completeness
+            op: "<"
+            value: 0.8
+          - field: dataset.quality_metrics.contamination
+            op: ">"
+            value: 0.05
+      then:
+        - action: set_field
+          target: dataset.quality_flag
+          value: "needs_review"
+        - action: emit_event
+          params:
+            event_type: quality_alert
+            message: 数据质量不达标，需人工复核
+      priority: 7
+      tags: [pipeline, quality]
+
+    - id: experiment_failed_analysis
+      name: 实验失败自动分析
+      description: 实验失败 → 触发失败原因推理
+      when:
+        all:
+          - field: experiment.status
+            op: "=="
+            value: "failed"
+      then:
+        - action: trigger_reasoning
+          params:
+            goal: 实验失败，推理可能原因与改进方案
+        - action: emit_event
+          params:
+            event_type: experiment_failed
+            experiment_id: "{experiment.id}"
+      priority: 8
+      tags: [experiment, failure_analysis]

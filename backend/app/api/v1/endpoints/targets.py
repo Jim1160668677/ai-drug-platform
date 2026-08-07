@@ -17,6 +17,7 @@ from app.models.target import Target, EvidenceGrade
 from app.models.user import User
 from app.api.v1.schemas import TargetResponse, StandardResponse
 from app.schemas.common import ApiResponse, PagedResponse, paged_response, success_response
+from app.services.coscientist.hooks import on_targets_discovered
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,10 +32,25 @@ async def discover_targets(
     current_user: User = Depends(get_current_user),
 ):
     """从数据集中发现靶点 — 突变→注释→通路→证据分级"""
+    # 权限校验：非 FOUNDER 必须是项目拥有者，防止越权触发他人项目的靶点发现
+    project = await db.get(Project, project_id)
+    if not project:
+        raise NotFoundError("项目不存在")
+    if current_user.role != UserRole.FOUNDER and project.owner_id != current_user.id:
+        raise ForbiddenError("无权操作此项目")
     from app.services.analyzer.target_identifier import TargetIdentifier
     identifier = TargetIdentifier(db)
     try:
         result = await identifier.discover(project_id=project_id, dataset_id=dataset_id, tier=tier)
+        # Co-Scientist auto-trigger hook
+        _disc_targets = result.get("targets", []) if isinstance(result, dict) else []
+        if _disc_targets:
+            _dt0 = _disc_targets[0]
+            await on_targets_discovered(
+                db=db, user=current_user, project_id=str(project_id),
+                target_id=str(_dt0.get("id")) if _dt0.get("id") else None,
+                gene_symbol=_dt0.get("gene_symbol") or _dt0.get("gene"),
+            )
         return StandardResponse(message=f"发现 {len(result.get('targets', []))} 个靶点", data=result)
     except AppException:
         raise
@@ -138,6 +154,71 @@ async def get_target(
     return TargetResponse.model_validate(target)
 
 
+@router.get("/{target_id}/protein-sequence", response_model=ApiResponse[Dict[str, Any]], summary="查询靶点蛋白氨基酸序列（UniProt）")
+async def get_target_protein_sequence(
+    target_id: UUID,
+    refresh: bool = Query(False, description="强制刷新缓存，重新查询 UniProt"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """从 UniProt 数据库查询靶点对应基因的 canonical 蛋白序列
+
+    - 缓存写入 target.annotation（dict 类型），键：protein_sequence / uniprot_id / protein_name
+      注：variant_info 在历史数据中可能是 list（变异列表），不能直接当 dict 用
+    - refresh=True 时强制重新查询 UniProt
+    """
+    target = await db.get(Target, target_id)
+    if not target:
+        raise NotFoundError("靶点不存在")
+    project = await db.get(Project, target.project_id)
+    if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
+        raise ForbiddenError("无权访问此资源")
+
+    # annotation 字段是 dict 类型，可安全用作缓存容器
+    annotation = target.annotation if isinstance(target.annotation, dict) else {}
+
+    # 命中缓存且未强制刷新
+    cached_seq = annotation.get("protein_sequence") if isinstance(annotation, dict) else None
+    if not refresh and cached_seq:
+        return success_response({
+            "uniprot_id": annotation.get("uniprot_id", ""),
+            "gene_symbol": target.gene_symbol,
+            "protein_name": annotation.get("protein_name", ""),
+            "sequence": cached_seq,
+            "sequence_length": len(cached_seq),
+            "source": "cache",
+        })
+
+    # 实时查询 UniProt
+    try:
+        from app.services.external.uniprot_client import fetch_canonical_sequence
+        result = await fetch_canonical_sequence(target.gene_symbol)
+    except Exception as e:
+        logger.warning(f"UniProt 客户端调用失败 target={target_id}: {e}")
+        return success_response({
+            "source": "error",
+            "error": f"UniProt 查询失败: {e}",
+            "gene_symbol": target.gene_symbol,
+        })
+
+    # 命中后写缓存到 annotation（不阻塞响应）
+    if result.get("source") == "uniprot" and result.get("sequence"):
+        try:
+            # 合并原 annotation（避免覆盖 entrez_id/pathway 等已有信息）
+            merged = dict(annotation) if isinstance(annotation, dict) else {}
+            merged["protein_sequence"] = result["sequence"]
+            merged["uniprot_id"] = result.get("uniprot_id", "")
+            merged["protein_name"] = result.get("protein_name", "")
+            target.annotation = merged
+            db.add(target)
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"蛋白序列缓存写入失败 target={target_id}: {e}")
+            await db.rollback()
+
+    return success_response(result)
+
+
 @router.post("/{target_id}/repurpose", response_model=StandardResponse, summary="老药新用扫描")
 async def repurpose_target(
     target_id: UUID,
@@ -148,6 +229,10 @@ async def repurpose_target(
     target = await db.get(Target, target_id)
     if not target:
         raise NotFoundError("靶点不存在")
+    # 权限校验：与 get_target 一致
+    project = await db.get(Project, target.project_id) if target.project_id else None
+    if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
+        raise ForbiddenError("无权访问此资源")
 
     from app.services.analyzer.drug_repurposer import DrugRepurposer
     repurposer = DrugRepurposer(db)
@@ -168,6 +253,10 @@ async def build_evidence_chain(
     target = await db.get(Target, target_id)
     if not target:
         raise NotFoundError("靶点不存在")
+    # 权限校验：与 get_target 一致
+    project = await db.get(Project, target.project_id) if target.project_id else None
+    if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
+        raise ForbiddenError("无权访问此资源")
 
     from app.services.analyzer.evidence_chain import EvidenceChainBuilder
     builder = EvidenceChainBuilder(db)
@@ -186,6 +275,10 @@ async def force_deep_analysis(
     target = await db.get(Target, target_id)
     if not target:
         raise NotFoundError("靶点不存在")
+    # 权限校验：与 get_target 一致（target→project→owner），防止越权触发他人项目深度分析
+    project = await db.get(Project, target.project_id) if target.project_id else None
+    if current_user.role != UserRole.FOUNDER and (not project or project.owner_id != current_user.id):
+        raise ForbiddenError("无权访问此资源")
     from app.services.analyzer.target_identifier import TargetIdentifier
     identifier = TargetIdentifier(db)
     try:

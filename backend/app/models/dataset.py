@@ -22,6 +22,12 @@ class DataType:
     IHC = "ihc"                        # 免疫组化
     FASTA = "fasta"                    # FASTA 序列
     VCF = "vcf"                        # VCF 变异文件
+    SNP_CHIP = "snp_chip"              # SNP 芯片基因型数据（23andMe/Ancestry/微信基因等）
+    MULTIQC = "multiqc"               # MultiQC 质控聚合报告
+    DICOM = "dicom"                   # DICOM 医学影像
+    CNV = "cnv"                        # 拷贝数变异段（CNVkit/Tempus segments）
+    XENIUM = "xenium"                  # Xenium 空间转录组聚类结果
+    NEOANTIGEN = "neoantigen"          # 新抗原表位预测结果（HLA/肽段/IC50）
 
 
 class ParseStatus:
@@ -44,6 +50,11 @@ class Dataset(Base, UUIDMixin, TimestampMixin):
     parse_status: Mapped[str] = mapped_column(String(20), default=ParseStatus.PENDING, index=True)
     quality_metrics: Mapped[Optional[dict]] = mapped_column(JSON)  # 质量指标
     parsed_summary: Mapped[Optional[dict]] = mapped_column(JSON)  # 解析结果摘要
+    # 规范化分析结果（parse_dataset 末尾由 BioAnalyzer 自动填充）
+    # 修复数据契约缺口 #2：下游 EvidenceCollector / AnalysisService 期望读取此字段，
+    # 但管道从未写入。结构：{"diff_expression": {...}, "clustering": {...},
+    # "enrichment": {...}, "statistics": {...}, "summary": "..."}
+    analysis_results: Mapped[Optional[dict]] = mapped_column(JSON)
     uploaded_by: Mapped[Optional[UUIDType]] = mapped_column(ForeignKey("users.id"))
     description: Mapped[Optional[str]] = mapped_column(Text)
 

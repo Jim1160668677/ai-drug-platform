@@ -2,7 +2,7 @@
 import asyncio
 import os
 import sys
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, Any
 
 # 测试环境强制 Mock 模式
 os.environ["USE_MOCK"] = "true"
@@ -11,10 +11,106 @@ os.environ["APP_ENV"] = "testing"
 # 确保测试用 SQLite
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
+# 测试环境启用 Fernet 加密（32 字节 URL-safe base64 密钥）
+# 使 encrypt()/decrypt() 在测试中真实加解密，而非明文降级
+os.environ["API_KEY_ENCRYPTION_KEY"] = "ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2VZ6JbXJc="
+
+# 强制计算引擎使用 Mock 模式（测试无需 GPU）
+os.environ["ESMFOLD_USE_MOCK"] = "true"
+os.environ["UNIMOL_USE_MOCK"] = "true"
+os.environ["VINA_USE_MOCK"] = "true"
+os.environ["SCGPT_USE_MOCK"] = "true"
+os.environ["MHCFLURRY_USE_MOCK"] = "true"
+os.environ["AIZYNTH_USE_MOCK"] = "true"
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+
+# ========== LLM 流式响应 mock 辅助函数 ==========
+# AgentEngine 现在调用 llm_router.stream_complete()（异步生成器）而非 complete()。
+# 本辅助函数将传统的 {content, usage, cost_usd} 响应包装为流式 chunk 序列，
+# 让测试 mock 自动适配新的流式接口，无需每个测试重写。
+
+async def _stream_complete_generator(response: Dict[str, Any]):
+    """将传统 chat 响应转换为流式 chunk 序列
+
+    yield:
+      {"type": "token", "content": <完整内容>} — 单个 token（整段作为一次推送）
+      {"type": "done", "content": <完整内容>, "usage": {...}, "model": "...",
+       "cost_usd": float, "duration_sec": float} — 完成事件
+    """
+    content = response.get("content", "")
+    usage = response.get("usage", {}) or {}
+    cost_usd = response.get("cost_usd", 0.0) or 0.0
+    model = response.get("model", "test-model")
+
+    # 单次推送整段内容（测试场景，不需要逐 token）
+    if content:
+        yield {"type": "token", "content": content}
+    yield {
+        "type": "done",
+        "content": content,
+        "usage": usage,
+        "model": model,
+        "cost_usd": cost_usd,
+        "duration_sec": 0.001,
+        "guardrail": {"passed": True, "blocked": False, "reasons": [], "sanitized": False},
+    }
+
+
+def make_llm_router_mock(response: Dict[str, Any]):
+    """构造一个同时支持 complete 和 stream_complete 的 LLMRouter mock
+
+    Args:
+        response: {content, usage, cost_usd, model?} 形式的响应字典
+
+    Returns:
+        MagicMock，已配置 complete（AsyncMock）和 stream_complete（异步生成器函数）
+    """
+    from unittest.mock import MagicMock, AsyncMock
+
+    router = MagicMock()
+    router.complete = AsyncMock(return_value=response)
+    # stream_complete 必须是普通函数（返回异步生成器），不能用 AsyncMock
+    # 因为 `async for chunk in router.stream_complete(...)` 期望返回 async generator
+    def _stream_factory(*args, **kwargs):
+        return _stream_complete_generator(response)
+    router.stream_complete = _stream_factory
+    router.select_model = MagicMock(return_value=response.get("model", "test-model"))
+    return router
+
+
+def make_streaming_llm_router_mock(response: Dict[str, Any]):
+    """make_llm_router_mock 的别名（语义更明确）"""
+    return make_llm_router_mock(response)
+
+
+def make_multi_response_llm_router_mock(responses):
+    """构造按顺序返回多个响应的 LLMRouter mock
+
+    Args:
+        responses: List[Dict] — 每次 stream_complete 调用依次返回一个响应
+
+    用于多步 ReAct 循环测试（每次 LLM 调用返回不同的 thought/action）。
+    """
+    from unittest.mock import MagicMock, AsyncMock
+
+    router = MagicMock()
+    call_state = {"idx": 0}
+
+    def _stream_factory(*args, **kwargs):
+        idx = call_state["idx"]
+        call_state["idx"] += 1
+        resp = responses[min(idx, len(responses) - 1)]
+        return _stream_complete_generator(resp)
+
+    router.stream_complete = _stream_factory
+    router.complete = AsyncMock(side_effect=lambda *a, **kw: responses[min(call_state["idx"] - 1, len(responses) - 1)])
+    router.select_model = MagicMock(return_value="test-model")
+    return router
 
 # 确保后端代码可导入
 backend_dir = os.path.join(os.path.dirname(__file__), "..")
@@ -23,10 +119,37 @@ sys.path.insert(0, backend_dir)
 from app.db.session import get_db  # noqa: E402
 from app.models.base import Base  # noqa: E402
 from app.models import (  # noqa: E402, F401 — 确保所有模型注册
-    user, project, dataset, target, molecule,
+    user, organization, project, dataset, target, molecule, developability, translation,
+    validation,
     treatment, hypothesis, experiment, audit, analysis_job, workflow_run,
     data_lineage, consent,
+    failure_knowledge,
 )
+from app.models.protein_structure import ProteinStructure  # noqa: E402, F401
+from app.models.compute_job import ComputeJob  # noqa: E402, F401
+from app.models.benchmark_report import BenchmarkReport  # noqa: E402, F401
+from app.models.neoantigen import Neoantigen  # noqa: E402, F401
+from app.models.synthesis_plan import SynthesisPlan  # noqa: E402, F401
+from app.models.analysis_template import AnalysisTemplate  # noqa: E402, F401
+from app.models.agent_session import AgentSession, SessionStatus  # noqa: E402, F401
+from app.models.agent_task import AgentTask, TaskStatus  # noqa: E402, F401
+from app.models.context_memory import ContextMemory  # noqa: E402, F401
+from app.models.coscientist_insight import CoScientistInsight  # noqa: E402, F401
+from app.models.coscientist_run import CoScientistRun  # noqa: E402, F401
+from app.models.llm_config import LLMConfig  # noqa: E402, F401
+from app.models.model_switch_log import ModelSwitchLog  # noqa: E402, F401
+from app.models.multimodal_asset import MultimodalAsset  # noqa: E402, F401
+from app.models.personal_genome import PersonalGenome, RiskAssessment  # noqa: E402, F401
+from app.models.pipeline_run import PipelineRun  # noqa: E402, F401
+from app.models.prompt_template import PromptTemplate  # noqa: E402, F401
+from app.models.reasoning_rule import ReasoningRule  # noqa: E402, F401
+from app.models.reasoning_trace import ReasoningTrace  # noqa: E402, F401
+from app.models.report import TargetReport  # noqa: E402, F401
+from app.models.sandbox_execution import SandboxExecution  # noqa: E402, F401
+from app.models.snp_locus import SnpLocus  # noqa: E402, F401
+from app.models.trait import Trait  # noqa: E402, F401
+from app.models.unified_session import UnifiedSession  # noqa: E402, F401
+from app.models.user_llm_config import UserLLMConfig  # noqa: E402, F401
 
 
 @pytest.fixture(scope="session")

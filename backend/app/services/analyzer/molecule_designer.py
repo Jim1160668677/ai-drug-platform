@@ -1,10 +1,215 @@
 """分子设计引擎 — DeepChem 性质预测 + RDKit 类药性评估"""
+import hashlib
 import logging
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+# ========== 分子自动命名工具 ==========
+
+# 骨架名称映射（Murcko Scaffold → 中文名称）
+_SCAFFOLD_NAMES = {
+    "c1ccccc1": "苯环",
+    "c1ccc2ccccc2c1": "萘环",
+    "c1ccncc1": "吡啶",
+    "c1cncnc1": "嘧啶环",
+    "c1c[nH]c(=O)nc1": "尿嘧啶",
+    "C1CCNCC1": "哌啶环",
+    "C1CCOC1": "四氢呋喃",
+    "C1CCCCC1": "环己烷",
+    "C1CC1": "环丙烷",
+    "c1ccoc1": "呋喃",
+    "c1cc[nH]c1": "吡咯",
+    "c1ccsc1": "噻吩",
+    "c1ccc2[nH]ccc2c1": "吲哚",
+    "c1ccc2c(c1)cco2": "苯并呋喃",
+    "c1ccc2c(c1)ccs2": "苯并噻吩",
+    "c1ccc2c(c1)nc[nH]2": "苯并咪唑",
+    "c1cnc2ccccc2c1": "异喹啉",
+    "c1ccc2ncccc2c1": "喹啉",
+}
+
+
+def generate_molecule_name(smiles: str, prefix: str = "Mol") -> str:
+    """基于 SMILES 自动生成有意义的分子名称
+
+    策略：
+    1. 优先使用 RDKit 计算的 Murcko 骨架 → 中文骨架名
+    2. 附加主要功能团（最多 2 个）
+    3. 附加分子式摘要
+    4. 附加 SMILES 哈希短码确保唯一性
+
+    Args:
+        smiles: 分子 SMILES
+        prefix: 名称前缀（如 Mol、Cand 表示候选）
+    Returns:
+        自动生成的分子名称，如 "Mol-苯环-羟基-酰胺-C8H9NO2-a3f9"
+    """
+    if not smiles:
+        return f"{prefix}-未命名"
+
+    # 计算 SMILES 短哈希（4 位）确保唯一性
+    short_hash = hashlib.md5(smiles.encode("utf-8")).hexdigest()[:4]
+
+    # 默认名称（RDKit 不可用时的回退）
+    fallback_name = f"{prefix}-{short_hash}"
+
+    try:
+        from rdkit import Chem
+        from rdkit.Chem.Scaffolds import MurckoScaffold
+    except ImportError:
+        return _generate_name_from_chars(smiles, prefix, short_hash)
+
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return fallback_name
+
+        scaffold_name = _identify_scaffold(mol)
+        functional_groups = _identify_functional_groups(mol)
+        formula = _calc_formula(mol)
+
+        parts = [prefix]
+        if scaffold_name:
+            parts.append(scaffold_name)
+        if functional_groups:
+            parts.append("-".join(functional_groups[:2]))
+        if formula:
+            parts.append(formula)
+        parts.append(short_hash)
+
+        return "-".join(parts)
+    except Exception as e:
+        logger.debug(f"分子自动命名失败: {e}")
+        return _generate_name_from_chars(smiles, prefix, short_hash)
+
+
+def _identify_scaffold(mol) -> str:
+    """识别分子骨架名称"""
+    try:
+        from rdkit import Chem
+        from rdkit.Chem.Scaffolds import MurckoScaffold
+        scaffold_smiles = MurckoScaffold.MurckoScaffoldSmiles(mol=mol)
+        if not scaffold_smiles:
+            return ""
+
+        # 精确匹配
+        if scaffold_smiles in _SCAFFOLD_NAMES:
+            return _SCAFFOLD_NAMES[scaffold_smiles]
+
+        # 模糊匹配：检查骨架是否包含已知环系
+        for known_scaffold, name in _SCAFFOLD_NAMES.items():
+            if known_scaffold in scaffold_smiles or scaffold_smiles in known_scaffold:
+                return name
+
+        # 通用：基于骨架的环数描述
+        scaffold_mol = Chem.MolFromSmiles(scaffold_smiles)
+        if scaffold_mol:
+            ring_count = scaffold_mol.GetRingInfo().NumRings()
+            if ring_count == 0:
+                return "无环"
+            elif ring_count == 1:
+                return "单环"
+            elif ring_count == 2:
+                return "双环"
+            elif ring_count == 3:
+                return "三环"
+            else:
+                return f"{ring_count}环"
+        return "杂环"
+    except Exception:
+        return ""
+
+
+def _identify_functional_groups(mol) -> List[str]:
+    """识别分子的主要功能团（最多 2 个）"""
+    fg_smarts = {
+        "羟基": "[#8X2H]",
+        "羧基": "[#6X3](=[#8X1])[#8X1H0-,X2H1]",
+        "酰胺": "[#7X3][#6X3](=[#8X1])",
+        "酯": "[#6X3](=[#8X1])[#8X2H0]",
+        "伯胺": "[#7X3;H2]",
+        "仲胺": "[#7X3;H1]",
+        "叔胺": "[#7X3;H0]",
+        "腈基": "[#6]#[#7]",
+        "卤代": "[F,Cl,Br,I]",
+        "磺酰胺": "[#16X4]([#8X2])([#8X2])[#7X3]",
+    }
+    found = []
+    try:
+        from rdkit import Chem
+        for name, smarts in fg_smarts.items():
+            patt = Chem.MolFromSmarts(smarts)
+            if patt and mol.HasSubstructMatch(patt):
+                matches = mol.GetSubstructMatches(patt)
+                count = len(matches)
+                if count > 0:
+                    found.append(f"{name}×{count}" if count > 1 else name)
+        return found
+    except Exception:
+        return []
+
+
+def _calc_formula(mol) -> str:
+    """计算分子式"""
+    try:
+        from rdkit import Chem
+        return Chem.rdMolDescriptors.CalcMolFormula(mol)
+    except Exception:
+        atom_counts = {}
+        for atom in mol.GetAtoms():
+            sym = atom.GetSymbol()
+            atom_counts[sym] = atom_counts.get(sym, 0) + 1
+        parts = []
+        for element in ["C", "H", "N", "O", "S", "F", "Cl", "Br", "I"]:
+            if element in atom_counts and atom_counts[element] > 0:
+                parts.append(f"{element}{atom_counts[element]}")
+        return "".join(parts) if parts else ""
+
+
+def _generate_name_from_chars(smiles: str, prefix: str, short_hash: str) -> str:
+    """RDKit 不可用时的字符级命名回退"""
+    n_c = smiles.count("C") + smiles.count("c")
+    n_n = smiles.count("N") + smiles.count("n")
+    n_o = smiles.count("O") + smiles.count("o")
+    has_aromatic = "c" in smiles
+    has_ring = any(d in smiles for d in "123456789")
+
+    parts = [prefix]
+    if has_aromatic:
+        parts.append("芳环")
+    elif has_ring:
+        parts.append("脂肪环")
+    else:
+        parts.append("链状")
+
+    elements = []
+    if n_c:
+        elements.append(f"C{n_c}")
+    if n_n:
+        elements.append(f"N{n_n}")
+    if n_o:
+        elements.append(f"O{n_o}")
+    if elements:
+        parts.append("".join(elements))
+
+    fg_simple = []
+    if "C(=O)O" in smiles:
+        fg_simple.append("羧基")
+    elif "NC(=O)" in smiles or "C(=O)N" in smiles:
+        fg_simple.append("酰胺")
+    elif "C(=O)OC" in smiles:
+        fg_simple.append("酯")
+    if "OH" in smiles:
+        fg_simple.append("羟基")
+    if fg_simple:
+        parts.append("-".join(fg_simple[:2]))
+
+    parts.append(short_hash)
+    return "-".join(parts)
 
 
 class MoleculeDesigner:
@@ -24,6 +229,11 @@ class MoleculeDesigner:
         target_id = payload.get("target_id")
         seed_smiles = payload.get("smiles")
         constraints = payload.get("constraints") or {}
+
+        # 修复 BUG-002：mock 模式下直接返回预置分子集，避免阻塞事件循环
+        from app.core.config import settings
+        if getattr(settings, "USE_MOCK", False):
+            return self._mock_design_result(target_id, seed_smiles, constraints)
 
         # 尝试加载 DeepChem（P2）
         try:
@@ -45,13 +255,17 @@ class MoleculeDesigner:
         )
 
         molecules = gen_result.get("molecules", [])
-        # 为每个分子附加类药性评估结果
+        # 为每个分子附加类药性评估结果（用 to_thread 包装避免阻塞事件循环）
+        import asyncio as _asyncio
         designed = []
         for mol in molecules:
             smiles = mol.get("smiles", "")
-            props = assess_druglikeness(smiles)
+            props = await _asyncio.to_thread(assess_druglikeness, smiles)
+            # 自动生成分子名称（如果生成策略未提供）
+            auto_name = mol.get("name") or generate_molecule_name(smiles, prefix="Cand")
             designed.append({
                 "smiles": smiles,
+                "name": auto_name,
                 "source": mol.get("source", strategy),
                 "properties": props,
                 "predicted_toxicity": max(0.0, 1.0 - props.get("druglikeness_score", 50) / 100),
@@ -182,9 +396,12 @@ class MoleculeDesigner:
             # 生成分子结构图（base64 PNG，rdkit 不可用时为 None）
             structure_image = self._generate_structure_image(smiles)
 
+            # 自动生成分子名称（如果生成策略未提供）
+            auto_name = mol.get("name") or generate_molecule_name(smiles, prefix="MT-Cand")
+
             designed.append({
                 "smiles": smiles,
-                "name": mol.get("name", ""),
+                "name": auto_name,
                 "structure_image": structure_image,
                 "source": mol.get("source", strategy),
                 "properties": props,
@@ -410,6 +627,78 @@ class MoleculeDesigner:
         except ImportError:
             return False
 
+    # ===== 修复 BUG-002：Mock 模式快速路径 =====
+
+    # 预置候选分子集（mock 模式直接返回，避免 RDKit/DeepChem 阻塞）
+    _MOCK_CANDIDATE_SMILES = [
+        "CC(=O)Oc1ccccc1C(=O)O",            # 阿司匹林
+        "CC(C)Cc1ccc(cc1)C(C)C(=O)O",        # 布洛芬
+        "CC1=C(C=C(C=C1)NC(=O)C)O",          # 对乙酰氨基酚
+        "OC1=CC=C(C=C1)C=O",                 # 4-羟基苯甲醛
+        "CC1=CC=C(C=C1)O",                   # p-甲酚
+        "C1=CC=C(C=C1)N",                    # 苯胺
+        "OC1=CC=CC=C1",                      # 苯酚
+        "C1=CC=C2C(=C1)NC=N2",              # 苯并咪唑
+        "CC(=O)NC1=CC=C(C=C1)O",            # 对乙酰氨基酚变体
+        "C1=CC=C(N=C1)C(=O)O",              # 异烟酸
+    ]
+
+    def _mock_design_result(
+        self,
+        target_id: Optional[str],
+        seed_smiles: Optional[str],
+        constraints: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Mock 模式设计结果 — 修复 BUG-002，避免阻塞事件循环"""
+        designed = []
+        for smiles in self._MOCK_CANDIDATE_SMILES[:5]:
+            props = _mock_assess_druglikeness(smiles)
+            auto_name = generate_molecule_name(smiles, prefix="Cand")
+            designed.append({
+                "smiles": smiles,
+                "name": auto_name,
+                "source": "mock_preset",
+                "properties": props,
+                "predicted_toxicity": max(0.0, 1.0 - props.get("druglikeness_score", 50) / 100),
+            })
+        return {
+            "designed_molecules": designed,
+            "model_info": {
+                "status": "mock_mode",
+                "message": "Mock 模式：返回预置候选分子集（修复 BUG-002）",
+                "strategy": "mock",
+                "target_id": target_id,
+                "seed_smiles": seed_smiles,
+                "constraints": constraints,
+            },
+        }
+
+    def _mock_generate_result(
+        self,
+        target_id: str,
+        strategy: str,
+        n: int,
+        seed_smiles: Optional[str],
+        constraints: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Mock 模式生成结果 — 修复 BUG-002，避免阻塞事件循环"""
+        molecules = []
+        for i, smiles in enumerate(self._MOCK_CANDIDATE_SMILES[:n]):
+            molecules.append({
+                "smiles": smiles,
+                "source": "mock_preset",
+                "name": f"MockMol-{i+1}",
+                "druglikeness": _mock_assess_druglikeness(smiles),
+            })
+        return {
+            "molecules": molecules,
+            "strategy": "mock",
+            "count": len(molecules),
+            "target_id": target_id,
+            "seed_smiles": seed_smiles,
+            "constraints": constraints,
+        }
+
     async def _design_with_deepchem(
         self,
         seed_smiles: str,
@@ -420,16 +709,15 @@ class MoleculeDesigner:
         import numpy as np
 
         # 1. 加载预训练模型（毒性/活性预测）
+        # 注意：模型加载失败时抛出异常（而非返回空列表），让 design() 方法的
+        # except 块捕获并降级到 RDKit 片段组合 + 类药性评估
         try:
             tasks, datasets, transformers = dc.molnet.load_tox21()
             model = dc.models.GraphConvModel(len(tasks), mode="classification")
             model.restore()  # 假设已有 checkpoint
         except Exception as e:
-            logger.warning(f"DeepChem 模型加载失败: {e}")
-            return {
-                "designed_molecules": [],
-                "model_info": {"status": "model_load_failed", "error": str(e)},
-            }
+            logger.warning(f"DeepChem 模型加载失败，将降级到 RDKit: {e}")
+            raise
 
         # 2. 基于种子 SMILES 生成类似分子（简化：仅评估种子）
         if seed_smiles:
@@ -481,6 +769,10 @@ class MoleculeDesigner:
             {"molecules": [...], "strategy": ..., "count": n}
         """
         constraints = constraints or {}
+        # 修复 BUG-002：mock 模式下返回预置分子集，避免阻塞事件循环
+        from app.core.config import settings
+        if getattr(settings, "USE_MOCK", False):
+            return self._mock_generate_result(target_id, strategy, n, seed_smiles, constraints)
         try:
             if strategy == "fragment":
                 molecules = self._generate_by_fragments(n, constraints)
