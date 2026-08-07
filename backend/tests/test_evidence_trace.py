@@ -325,3 +325,202 @@ class TestEvidenceTraceAPI:
                 assert step["evidence"]["query"] == "EGFR resistance"
             else:
                 assert step["evidence"] is None
+
+
+# ============================================================
+# Task 2: Reexecute Academic Search
+# ============================================================
+
+
+class TestAcademicSearchReexecute:
+    """测试 POST /api/v1/knowledge/academic-search/reexecute 端点"""
+
+    @pytest.mark.asyncio
+    async def test_reexecute_creates_new_step(self, client, db_session):
+        """重执行应创建新的 tool_call 追溯步骤"""
+        session_id = uuid4()
+        from app.models.unified_session import UnifiedSession
+        sess = UnifiedSession(
+            id=session_id,
+            user_id=TEST_USER_ID,
+            title="Reexecute Test",
+            status="active",
+            primary_mode="reasoning",
+        )
+        db_session.add(sess)
+        await db_session.commit()
+
+        resp = await client.post(
+            "/api/v1/knowledge/academic-search/reexecute",
+            json={
+                "session_id": str(session_id),
+                "query": "PD-1 immunotherapy resistance",
+                "sources": ["pubmed", "biorxiv"],
+                "limit_per_source": 3,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert "step_id" in data
+        assert data["query"] == "PD-1 immunotherapy resistance"
+        assert "papers" in data
+        assert "total_hits" in data
+        assert "search_time_ms" in data
+
+        # Verify step was persisted in DB
+        from app.models.reasoning_trace import ReasoningTrace
+        step_uuid = UUID(data["step_id"])
+        step = await db_session.get(ReasoningTrace, step_uuid)
+        assert step is not None
+        assert step.step_type == "tool_call"
+        assert step.session_id == session_id
+        assert step.input_data["query"] == "PD-1 immunotherapy resistance"
+        assert step.input_data["reexecute"] is True
+
+    @pytest.mark.asyncio
+    async def test_reexecute_links_parent_step(self, client, db_session):
+        """重执行应通过 parent_step_id 链接到原始步骤"""
+        session_id = uuid4()
+        from app.models.unified_session import UnifiedSession
+        sess = UnifiedSession(
+            id=session_id,
+            user_id=TEST_USER_ID,
+            title="Parent Link Test",
+            status="active",
+            primary_mode="reasoning",
+        )
+        db_session.add(sess)
+        await db_session.commit()
+
+        original_step_id = _create_trace_step(
+            db_session, session_id, "tool_call",
+            input_data={"query": "original query", "sources": ["pubmed"]},
+            output_data={"total_hits": {"pubmed": 5}, "papers": []},
+        )
+        await db_session.commit()
+
+        resp = await client.post(
+            "/api/v1/knowledge/academic-search/reexecute",
+            json={
+                "session_id": str(session_id),
+                "original_step_id": str(original_step_id),
+                "query": "modified query for resistance mechanisms",
+                "sources": ["pubmed", "arxiv"],
+                "limit_per_source": 5,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        data = body["data"]
+        assert data["parent_step_id"] == str(original_step_id)
+
+        from app.models.reasoning_trace import ReasoningTrace
+        step_uuid = UUID(data["step_id"])
+        step = await db_session.get(ReasoningTrace, step_uuid)
+        assert step.parent_step_id == original_step_id
+
+    @pytest.mark.asyncio
+    async def test_reexecute_original_step_immutable(self, client, db_session):
+        """重执行不应修改原始步骤"""
+        session_id = uuid4()
+        from app.models.unified_session import UnifiedSession
+        sess = UnifiedSession(
+            id=session_id,
+            user_id=TEST_USER_ID,
+            title="Immutable Test",
+            status="active",
+            primary_mode="reasoning",
+        )
+        db_session.add(sess)
+        await db_session.commit()
+
+        original_input = {"query": "original immutable query", "sources": ["pubmed"]}
+        original_output = {"total_hits": {"pubmed": 10}, "papers": [{"title": "Original Paper"}]}
+        original_step_id = _create_trace_step(
+            db_session, session_id, "tool_call",
+            input_data=original_input,
+            output_data=original_output,
+        )
+        await db_session.commit()
+
+        await client.post(
+            "/api/v1/knowledge/academic-search/reexecute",
+            json={
+                "session_id": str(session_id),
+                "original_step_id": str(original_step_id),
+                "query": "completely different query",
+                "sources": ["biorxiv"],
+                "limit_per_source": 2,
+            },
+        )
+
+        from app.models.reasoning_trace import ReasoningTrace
+        original = await db_session.get(ReasoningTrace, original_step_id)
+        assert original.input_data == original_input
+        assert original.output_data == original_output
+
+    @pytest.mark.asyncio
+    async def test_reexecute_returns_404_for_missing_parent(self, client, db_session):
+        """引用不存在的原始步骤应返回错误"""
+        session_id = uuid4()
+        from app.models.unified_session import UnifiedSession
+        sess = UnifiedSession(
+            id=session_id,
+            user_id=TEST_USER_ID,
+            title="Missing Parent Test",
+            status="active",
+            primary_mode="reasoning",
+        )
+        db_session.add(sess)
+        await db_session.commit()
+
+        fake_step_id = uuid4()
+        resp = await client.post(
+            "/api/v1/knowledge/academic-search/reexecute",
+            json={
+                "session_id": str(session_id),
+                "original_step_id": str(fake_step_id),
+                "query": "test query",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is False
+        assert "不存在" in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_reexecute_without_parent(self, client, db_session):
+        """不带 original_step_id 的重执行应成功且 parent_step_id 为 None"""
+        session_id = uuid4()
+        from app.models.unified_session import UnifiedSession
+        sess = UnifiedSession(
+            id=session_id,
+            user_id=TEST_USER_ID,
+            title="No Parent Test",
+            status="active",
+            primary_mode="reasoning",
+        )
+        db_session.add(sess)
+        await db_session.commit()
+
+        resp = await client.post(
+            "/api/v1/knowledge/academic-search/reexecute",
+            json={
+                "session_id": str(session_id),
+                "query": "CAR-T cell therapy",
+                "sources": ["pubmed"],
+                "limit_per_source": 3,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["parent_step_id"] is None
+
+        from app.models.reasoning_trace import ReasoningTrace
+        step_uuid = UUID(data["step_id"])
+        step = await db_session.get(ReasoningTrace, step_uuid)
+        assert step.parent_step_id is None

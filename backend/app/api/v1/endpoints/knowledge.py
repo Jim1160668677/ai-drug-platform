@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_gene_client, get_variant_client, get_chembl_client
 from app.db.session import get_db
+from app.models.reasoning_trace import ReasoningTrace
 from app.models.user import User
 from app.api.v1.schemas import StandardResponse
 from app.schemas.common import success_response
@@ -207,4 +208,92 @@ async def academic_search(payload: AcademicSearchRequest, current_user: User = D
     return success_response(AcademicSearchResponse(
         query=payload.query, sources_queried=payload.sources, total_hits=total_hits,
         papers=[p.model_dump() for p in papers], search_time_ms=elapsed
+    ).model_dump())
+
+
+class AcademicSearchReexecuteRequest(BaseModel):
+    session_id: UUID
+    original_step_id: Optional[UUID] = None
+    query: str = Field(..., min_length=1, max_length=500)
+    sources: List[str] = Field(default=["pubmed", "biorxiv", "arxiv", "semantic_scholar", "crossref"])
+    limit_per_source: int = Field(default=10, ge=1, le=50)
+    year_from: Optional[int] = Field(default=None, ge=1900, le=2100)
+    year_to: Optional[int] = Field(default=None, ge=1900, le=2100)
+    deduplicate: bool = True
+
+
+class AcademicSearchReexecuteResponse(BaseModel):
+    step_id: str
+    parent_step_id: Optional[str]
+    query: str
+    sources_queried: List[str]
+    total_hits: Dict[str, int]
+    papers: List[dict]
+    search_time_ms: int
+
+
+@router.post("/academic-search/reexecute", response_model=StandardResponse, summary="重执行学术检索(创建新追溯步骤)")
+async def academic_search_reexecute(
+    payload: AcademicSearchReexecuteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """重执行学术检索 — 用修改后的参数重新检索,创建新的不可变追溯步骤
+
+    原始步骤保持不变,新步骤通过 parent_step_id 链接到原始步骤,
+    形成检索演进链。每个步骤的 evidence 数据独立存储。
+    """
+    from app.services.analyzer.academic_search_client import AcademicSearchClient
+
+    parent_step_id = payload.original_step_id
+
+    if parent_step_id:
+        existing = await db.get(ReasoningTrace, parent_step_id)
+        if not existing:
+            return StandardResponse(
+                success=False,
+                message=f"原始追溯步骤不存在: {parent_step_id}",
+                data={"step_id": str(parent_step_id)},
+            )
+
+    t0 = time.time()
+    client = AcademicSearchClient()
+    raw = await client.search_all(payload.query, payload.sources, payload.limit_per_source,
+                                 payload.year_from, payload.year_to)
+    papers = [p for plist in raw.values() for p in plist]
+    total_hits = {src: len(plist) for src, plist in raw.items()}
+    if payload.deduplicate:
+        papers = client.deduplicate(papers)
+    papers = AcademicSearchClient.sort_by_relevance(papers)
+    elapsed = int((time.time() - t0) * 1000)
+
+    new_step = ReasoningTrace(
+        session_id=payload.session_id,
+        parent_step_id=parent_step_id,
+        step_type="tool_call",
+        input_data={
+            "query": payload.query,
+            "sources": payload.sources,
+            "year_from": payload.year_from,
+            "year_to": payload.year_to,
+            "reexecute": True,
+        },
+        output_data={
+            "total_hits": total_hits,
+            "papers": [p.model_dump() for p in papers],
+        },
+        status="completed",
+    )
+    db.add(new_step)
+    await db.commit()
+    await db.refresh(new_step)
+
+    return success_response(AcademicSearchReexecuteResponse(
+        step_id=str(new_step.id),
+        parent_step_id=str(parent_step_id) if parent_step_id else None,
+        query=payload.query,
+        sources_queried=payload.sources,
+        total_hits=total_hits,
+        papers=[p.model_dump() for p in papers],
+        search_time_ms=elapsed,
     ).model_dump())
