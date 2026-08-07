@@ -245,6 +245,7 @@ class Settings(BaseSettings):
     COSCIENTIST_FAST_ROUND_TIMEOUT_SEC: float = 120.0       # fast: 每轮 2min
     COSCIENTIST_STANDARD_ROUND_TIMEOUT_SEC: float = 300.0   # standard: 每轮 5min
     COSCIENTIST_DEEP_ROUND_TIMEOUT_SEC: float = 600.0       # deep: 每轮 10min
+    COSCIENTIST_AUTO_EXPERIMENT_DESIGN: bool = False
     COSCIENTIST_FAST_MAX_ROUNDS: int = 2
     COSCIENTIST_STANDARD_MAX_ROUNDS: int = 3
     COSCIENTIST_DEEP_MAX_ROUNDS: int = 5

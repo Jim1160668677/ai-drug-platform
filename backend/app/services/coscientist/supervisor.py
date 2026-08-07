@@ -17,6 +17,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 
 from app.core.config import settings
 from app.services.coscientist.agents.base import BaseAgent
@@ -73,6 +74,8 @@ class CoScientistResult:
     error: Optional[str] = None
     all_hypotheses: List[Dict[str, Any]] = field(default_factory=list)
     evolution_summary: str = ""
+    experiment_dsl: Optional[Dict[str, Any]] = None  # Auto-generated experiment design DSL
+    experiment_schedule_id: Optional[str] = None  # Schedule ID from ExperimentScheduler
 
 
 class Supervisor:
@@ -695,7 +698,7 @@ class Supervisor:
             duration = time.time() - start_time
             await self.tracker.emit_run_completed(hypotheses, meta_review)
 
-            return CoScientistResult(
+            result = CoScientistResult(
                 run_id=self.tracker.run_id,
                 research_goal=research_goal,
                 final_rankings=hypotheses,
@@ -708,6 +711,17 @@ class Supervisor:
                 all_hypotheses=hypotheses,
                 evolution_summary=evolution_summary,
             )
+
+            # 新增: 自动生成实验设计 (controlled by settings)
+            if result.final_rankings and getattr(settings, "COSCIENTIST_AUTO_EXPERIMENT_DESIGN", False):
+                dsl = await self._auto_generate_dsl(
+                    result.final_rankings[:3],
+                    result.research_goal,
+                )
+                if dsl:
+                    result.experiment_dsl = dsl.to_dict()
+
+            return result
 
         except Exception as e:
             logger.exception("[supervisor] 运行失败: %s", e)
@@ -757,6 +771,55 @@ class Supervisor:
                 f"保持={strategies.get('keep', 0)}"
             )
         return "\n".join(lines)
+
+    async def _auto_generate_dsl(
+        self,
+        top_hypotheses: List[Dict[str, Any]],
+        research_goal: str,
+    ) -> Optional[Any]:
+        """调用 ExperimentDesignTool 生成 DSL"""
+        if not top_hypotheses:
+            return None
+
+        try:
+            from app.services.agent.tools.experiment_design import ExperimentDesignTool
+            from app.services.experiment.dsl import ExperimentDSL
+            from unittest.mock import MagicMock
+
+            tool = ExperimentDesignTool()
+            ctx = MagicMock()
+            ctx.llm_client = None
+
+            result = await tool.execute({
+                "goal": research_goal,
+                "hypothesis_ids": [h.get("id") for h in top_hypotheses[:3] if h.get("id")],
+                "exp_type": "cytotoxicity",
+            }, ctx=ctx)
+
+            if result.ok():
+                dsl_data = result.data.get("dsl", {})
+                return ExperimentDSL.from_dict(dsl_data)
+        except Exception as e:
+            logger.warning("[supervisor] DSL generation failed: %s", e)
+
+        return None
+
+    async def _auto_schedule(
+        self,
+        dsl: Any,
+        project_id: UUID,
+    ) -> Optional[Dict[str, Any]]:
+        """调用 ExperimentScheduler 调度实验"""
+        if dsl is None:
+            return None
+
+        try:
+            from app.services.experiment.scheduler import ExperimentScheduler
+            scheduler = ExperimentScheduler()
+            return scheduler.schedule(dsl, str(project_id))
+        except Exception as e:
+            logger.warning("[supervisor] Scheduling failed: %s", e)
+            return None
 
     def get_agent_stats(self) -> Dict[str, Dict]:
         """获取所有 Agent 的统计"""
