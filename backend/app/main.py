@@ -44,6 +44,39 @@ def _rate_limit_envelope_handler(request: Request, exc: RateLimitExceeded) -> JS
     )
 
 
+async def _recover_interrupted_runs() -> None:
+    """启动时恢复因服务重启而中断的 Co-Scientist 运行
+
+    活跃 Supervisor 仅存于进程内存，重启后无法恢复执行，
+    将 RUNNING/PENDING 状态标记为 FAILED 并记录原因，避免永久卡死。
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.db.session import async_session_factory
+    from app.models.coscientist_run import CoScientistRun, RunStatus
+
+    try:
+        async with async_session_factory() as db:
+            interrupted = [RunStatus.PENDING, RunStatus.RUNNING]
+            result = await db.execute(
+                select(CoScientistRun).where(CoScientistRun.status.in_(interrupted))
+            )
+            runs = list(result.scalars().all())
+            if not runs:
+                return
+            now = datetime.now(timezone.utc)
+            for run in runs:
+                run.status = RunStatus.FAILED
+                run.completed_at = now
+                run.error_message = "服务重启中断，任务未完成"
+            await db.commit()
+            logger.info(f"[恢复] 标记 {len(runs)} 个中断运行为 FAILED")
+    except Exception as e:
+        logger.warning(f"[恢复] 中断运行恢复跳过（数据库不可用）: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动与关闭"""
@@ -52,7 +85,7 @@ async def lifespan(app: FastAPI):
     logger.info("AI模式精准药物设计系统 启动中...")
     logger.info(f"  环境: {settings.APP_ENV}")
     logger.info(f"  Mock 模式: {settings.USE_MOCK}")
-    logger.info(f"  数据库: {settings.DATABASE_URL.split('@')[-1]}")
+    logger.info(f"  数据库: {(settings.DATABASE_URL or 'sqlite+aiosqlite:///./data/app.db').split('@')[-1]}")
     logger.info(f"  信封中间件: {'启用' if settings.ENVELOPE_MIDDLEWARE_ENABLED else '禁用'}")
     logger.info(f"  LLM 每日预算: ${settings.LLM_DAILY_BUDGET_USD}")
     logger.info(f"  安全护栏: {'启用' if settings.GUARDRAIL_ENABLED else '禁用'}")
@@ -66,6 +99,9 @@ async def lifespan(app: FastAPI):
             logger.info("数据库表已就绪")
         except Exception as e:
             logger.warning(f"数据库初始化跳过（可能未连接）: {e}")
+
+    # 恢复因服务重启中断的 Co-Scientist 运行（RUNNING/PENDING → FAILED）
+    await _recover_interrupted_runs()
 
     yield
 

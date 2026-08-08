@@ -367,12 +367,13 @@ async def _persist_run_result(
                 )
                 existing_ids = {str(r[0]) for r in existing_result.fetchall()}
 
+                new_hypotheses = []
                 for hyp_dict in result.all_hypotheses:
                     hyp_id = hyp_dict.get("id")
                     if hyp_id and str(hyp_id) in existing_ids:
                         continue
 
-                    hyp = Hypothesis(
+                    new_hypotheses.append(Hypothesis(
                         project_id=uuid.UUID(project_id),
                         name=str(hyp_dict.get("name", "未命名假设"))[:200],
                         description=hyp_dict.get("description", ""),
@@ -392,8 +393,9 @@ async def _persist_run_result(
                         critique_summary=hyp_dict.get("critique_summary"),
                         coscientist_run_id=uuid.UUID(run_id),
                         rank=hyp_dict.get("rank"),
-                    )
-                    db.add(hyp)
+                    ))
+                # 批量追加（SQLAlchemy 2.0 batch flush 合并为单批 executemany）
+                db.add_all(new_hypotheses)
 
             await db.commit()
             logger.info(
