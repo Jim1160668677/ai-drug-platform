@@ -374,6 +374,8 @@ class FeedbackLoop:
             )
 
         effective_confidence = confidence if confidence is not None else 1.0
+        # 与 Elo 锦标赛 K-factor (32) 对齐
+        K_FACTOR = 32
 
         async with self.db.begin() as transaction:
             hypothesis = experiment.hypothesis

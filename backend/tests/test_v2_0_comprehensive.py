@@ -70,20 +70,20 @@ class TestFeedbackWithExperimentalElo:
         result = await loop.apply_validation_feedback(experiment, "VALIDATED", confidence=0.8)
 
         assert result["success"] is True
-        assert result["elo_change"] == pytest.approx(12.0, abs=0.01)  # 15 * 0.8
+        assert result["elo_change"] == pytest.approx(25.6, abs=0.01)  # 32 * 0.8
         assert result["elo_before"] == 1000.0
-        assert result["elo_after"] == pytest.approx(1012.0, abs=0.01)
+        assert result["elo_after"] == pytest.approx(1025.6, abs=0.01)
 
         # 验证 experimental_elo_adjustment 字段被更新
         h = experiment.hypothesis
-        assert h.experimental_elo_adjustment == pytest.approx(12.0, abs=0.01)
+        assert h.experimental_elo_adjustment == pytest.approx(25.6, abs=0.01)
         assert h.experimental_validation_count == 1
 
         # 验证 evolution_history 记录包含 experimental_elo_cumulative
         assert len(h.evolution_history) == 1
         entry = h.evolution_history[0]
         assert "experimental_elo_cumulative" in entry
-        assert entry["experimental_elo_cumulative"] == pytest.approx(12.0, abs=0.01)
+        assert entry["experimental_elo_cumulative"] == pytest.approx(25.6, abs=0.01)
 
     @pytest.mark.asyncio
     async def test_refuted_conclusion_negative_elo(self):
@@ -123,11 +123,11 @@ class TestFeedbackWithExperimentalElo:
         result = await loop.apply_validation_feedback(experiment, "REFUTED", confidence=1.0)
 
         assert result["success"] is True
-        assert result["elo_change"] == -25.0
+        assert result["elo_change"] == -48.0  # -32 * 1.5
 
         h = experiment.hypothesis
-        # 累计：之前 5.0 + 本次 -25.0 = -20.0
-        assert h.experimental_elo_adjustment == pytest.approx(-20.0, abs=0.01)
+        # 累计：之前 5.0 + 本次 -48.0 = -43.0
+        assert h.experimental_elo_adjustment == pytest.approx(-43.0, abs=0.01)
         assert h.experimental_validation_count == 3
 
     @pytest.mark.asyncio
@@ -168,13 +168,13 @@ class TestFeedbackWithExperimentalElo:
 
         # 低置信度：0.3
         result_low = await loop.apply_validation_feedback(experiment, "VALIDATED", confidence=0.3)
-        assert result_low["elo_change"] == pytest.approx(4.5, abs=0.01)
+        assert result_low["elo_change"] == pytest.approx(9.6, abs=0.01)
 
         # 高置信度：0.9
         experiment.hypothesis.elo_score = 1000.0
         experiment.hypothesis.experimental_elo_adjustment = 0.0
         result_high = await loop.apply_validation_feedback(experiment, "VALIDATED", confidence=0.9)
-        assert result_high["elo_change"] == pytest.approx(13.5, abs=0.01)
+        assert result_high["elo_change"] == pytest.approx(28.8, abs=0.01)
 
         # 断言：高置信度 > 低置信度
         assert result_high["elo_change"] > result_low["elo_change"]
