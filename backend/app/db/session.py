@@ -9,8 +9,11 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 
+# DATABASE_URL 未配置时回退到本地 SQLite（开发/测试兜底，生产必须显式配置）
+_database_url = settings.DATABASE_URL or "sqlite+aiosqlite:///./data/app.db"
+
 # SQLite 不支持 pool_size/max_overflow 参数
-_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+_is_sqlite = _database_url.startswith("sqlite")
 
 _engine_kwargs = {
     "echo": settings.APP_ENV == "development",
@@ -21,7 +24,7 @@ if not _is_sqlite:
     _engine_kwargs["max_overflow"] = 10
 
 # 异步引擎
-engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
+engine = create_async_engine(_database_url, **_engine_kwargs)
 
 # 异步会话工厂
 AsyncSessionLocal = async_sessionmaker(

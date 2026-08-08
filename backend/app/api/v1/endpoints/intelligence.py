@@ -24,7 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.schemas import StandardResponse
 from app.core.deps import get_current_user, get_llm_client_with_fallback
 from app.core.config import settings
+from app.core.security import UserRole
 from app.db.session import get_db
+from app.models.coscientist_run import CoScientistRun
 from app.models.unified_session import PrimaryMode, UnifiedSession, UnifiedSessionStatus
 from app.models.user import User
 from app.schemas.intelligence import (
@@ -66,6 +68,27 @@ async def _get_session_or_404(db: AsyncSession, session_id: UUID, user: User) ->
     if session.user_id != user.id and user.role != "founder":
         raise HTTPException(status_code=403, detail="无权访问此会话")
     return session
+
+
+async def _verify_trace_run_or_404(db: AsyncSession, run_id: UUID, user: User) -> None:
+    """校验推理追溯 run_id 归属（CoScientistRun 或 UnifiedSession）"""
+    result = await db.execute(
+        select(CoScientistRun).where(CoScientistRun.id == run_id)
+    )
+    run = result.scalar_one_or_none()
+    if run is not None:
+        if run.user_id != user.id and user.role != UserRole.FOUNDER:
+            raise HTTPException(status_code=403, detail="无权访问此运行")
+        return
+
+    result = await db.execute(
+        select(UnifiedSession).where(UnifiedSession.id == run_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="运行不存在")
+    if session.user_id != user.id and user.role != UserRole.FOUNDER:
+        raise HTTPException(status_code=403, detail="无权访问此运行")
 
 
 def _session_to_response(session: UnifiedSession) -> SessionResponse:
@@ -298,6 +321,7 @@ async def get_trace_tree(
     user: User = Depends(get_current_user),
 ):
     """10. 获取推理运行的步骤树"""
+    await _verify_trace_run_or_404(db, run_id, user)
     orchestrator = UnifiedOrchestrator(db, llm_client=None)
     tree = await orchestrator.get_run_trace_tree(run_id)
     resp = TraceTreeResponse(
@@ -314,6 +338,7 @@ async def get_cost_breakdown(
     user: User = Depends(get_current_user),
 ):
     """11. 获取推理运行的成本分解"""
+    await _verify_trace_run_or_404(db, run_id, user)
     orchestrator = UnifiedOrchestrator(db, llm_client=None)
     cost = await orchestrator.get_run_cost_breakdown(run_id)
     resp = CostBreakdownResponse(
@@ -331,6 +356,7 @@ async def get_decision_chain(
     user: User = Depends(get_current_user),
 ):
     """12. 获取推理运行的决策链"""
+    await _verify_trace_run_or_404(db, run_id, user)
     orchestrator = UnifiedOrchestrator(db, llm_client=None)
     decisions = await orchestrator.get_run_decision_chain(run_id)
     resp = DecisionChainResponse(decisions=decisions)

@@ -1118,12 +1118,46 @@ async def get_comprehensive_template(
 async def run_websocket(
     websocket: WebSocket,
     run_id: str,
+    token: Optional[str] = Query(None, description="JWT access token"),
 ):
     """WebSocket 实时推送运行进度
 
     客户端连接后自动订阅指定 run 的事件。
     可发送 feedback 消息提交专家反馈。
     """
+    from app.services.agent.ws_handler import (
+        authenticate_ws_token,
+        reject_ws,
+        WS_CODE_AUTH_FAILED,
+        WS_CODE_FORBIDDEN,
+    )
+
+    # 鉴权
+    user_id = await authenticate_ws_token(token)
+    if user_id is None:
+        await reject_ws(websocket, WS_CODE_AUTH_FAILED, "鉴权失败")
+        return
+
+    # 校验运行归属
+    from app.db.session import async_session_factory
+
+    async with async_session_factory() as db:
+        try:
+            run_uuid = UUID(run_id)
+        except ValueError:
+            await websocket.close(code=4400, reason="无效的 run_id")
+            return
+        run = await db.get(CoScientistRun, run_uuid)
+        if run is None:
+            await websocket.close(code=4404, reason="运行不存在")
+            return
+        if str(run.user_id) != user_id:
+            logger.warning(
+                "[coscientist] WS 越权拒绝: run=%s user=%s", run_id, user_id
+            )
+            await websocket.close(code=WS_CODE_FORBIDDEN, reason="无权访问此运行")
+            return
+
     await websocket.accept()
 
     # 注册客户端

@@ -153,3 +153,59 @@ async def test_stream_endpoint_media_type(client: AsyncClient):
         )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
+
+
+@pytest.mark.asyncio
+async def test_trace_tree_rejects_other_users_run(client: AsyncClient, db_session):
+    """trace-tree/cost/decisions 必须校验 run 归属：非 owner 返回 403"""
+    from app.models.coscientist_run import CoScientistRun, RunStatus
+
+    other_user_id = uuid_mod.uuid4()
+    other = User(
+        id=other_user_id,
+        email="other@test.com",
+        name="Other User",
+        hashed_password=hash_password("pass123"),
+        role=UserRole.CHIEF_RESEARCHER,
+        is_active=True,
+    )
+    run_id = uuid_mod.uuid4()
+    db_session.add(other)
+    db_session.add(CoScientistRun(
+        id=run_id,
+        user_id=other_user_id,
+        research_goal="他人研究目标",
+        status=RunStatus.COMPLETED,
+    ))
+    await db_session.commit()
+
+    for path in (f"/api/v1/intelligence/runs/{run_id}/trace-tree",
+                 f"/api/v1/intelligence/runs/{run_id}/cost",
+                 f"/api/v1/intelligence/runs/{run_id}/decisions"):
+        resp = await client.get(path)
+        assert resp.status_code == 403, f"{path} 应拒绝越权访问，实际 {resp.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_trace_tree_allows_owner(client: AsyncClient, db_session):
+    """owner 访问 trace-tree 通过校验（无数据时返回空树 200）"""
+    from app.models.coscientist_run import CoScientistRun, RunStatus
+
+    run_id = uuid_mod.uuid4()
+    db_session.add(CoScientistRun(
+        id=run_id,
+        user_id=TEST_USER_ID,
+        research_goal="我的研究目标",
+        status=RunStatus.COMPLETED,
+    ))
+    await db_session.commit()
+
+    resp = await client.get(f"/api/v1/intelligence/runs/{run_id}/trace-tree")
+    assert resp.status_code == 200, f"owner 应可访问，实际 {resp.status_code}: {resp.text}"
+
+
+@pytest.mark.asyncio
+async def test_trace_tree_unknown_run_returns_404(client: AsyncClient):
+    """不存在的 run 返回 404"""
+    resp = await client.get(f"/api/v1/intelligence/runs/{uuid_mod.uuid4()}/trace-tree")
+    assert resp.status_code == 404
