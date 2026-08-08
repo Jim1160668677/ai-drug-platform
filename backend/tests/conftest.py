@@ -173,6 +173,23 @@ def reset_rate_limiter_storage():
     yield
 
 
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _dispose_global_engine():
+    """会话级清理：关闭全局异步引擎的连接工作线程
+
+    后台任务（如 agent/chat 的 _run_in_background）使用 app.db.session 的全局
+    async_session_factory，其 aiosqlite worker 线程是非 daemon 的，若连接不关闭，
+    pytest 退出时会永远阻塞在 threading._shutdown（本机观察到的挂起现象）。
+    测试全部结束后 dispose 全局引擎，使 worker 线程退出。
+    """
+    yield
+    try:
+        from app.db.session import engine as _global_engine
+        await _global_engine.dispose()
+    except Exception:
+        pass
+
+
 @pytest_asyncio.fixture
 async def async_db_session() -> AsyncGenerator[AsyncSession, None]:
     """SQLite in-memory 数据库会话"""
